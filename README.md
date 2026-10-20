@@ -1,12 +1,14 @@
-# template Loup commandline application
+# loup-cmd-tr
 
-A GitHub template for a command-line application written in
-[Loup](https://code-craft.ai/references/loup). It includes argument parsing,
-command dispatch, a sample `hello` command, tests, a native build and a CI
-workflow.
+GNU `tr` recreated in [Loup](https://code-craft.ai/references/loup):
+translate, delete or squeeze characters from standard input, with GNU's SET
+language (`a-z`, `[:alpha:]`, `[=c=]`, `[c*n]`, escapes), its validation
+rules and messages, working on Unicode characters rather than bytes.
 
-After creating a repository from this template, work through
-[REPOSITORY_TODOS.md](REPOSITORY_TODOS.md).
+Part of the **loup-cmd** series of example applications: classic Linux and
+Windows commands, and projects for each Loup execution mode, each in its own
+repository under [myronccai](https://github.com/myronccai?tab=repositories&q=loup-cmd).
+This one is `host.dual` Loup built as a native binary.
 
 ## Requirements
 
@@ -14,70 +16,135 @@ After creating a repository from this template, work through
 
   ```sh
   curl -fsSL https://github.com/code-craft-ai-company/loup-releases/releases/latest/download/loup-install.sh | sh
-  loup --version
   ```
 
-- `make`
-- `clang` 17 or later for native builds. Native builds are supported on Linux
-  x86-64 and arm64, and are a preview on macOS and Windows.
+- `make`, and `clang` 17 or later for the native build.
 
 ## Usage
 
 ```sh
-make run ARGS="--help"            # run from source
-make run ARGS="hello Ann --shout"
-make check                        # type-check the program
-make test                         # run the tests in tests/
-make build                        # native binary: build/myapp
-make ci                           # check, test, build and smoke-test the binary
-make clean
+make build                                    # native binary: build/tr
+make ci                                       # check, unit tests, build, end-to-end tests
+echo hello | make run ARGS="a-z A-Z"          # run from source with loup run
 ```
 
 ```text
-$ build/myapp --help
-usage: myapp [OPTIONS] COMMAND [ARGS...]
-
-A command-line application written in Loup.
-
-Commands:
-  hello [NAME]          Print a greeting (NAME defaults to 'world')
-  help                  Show this help
-
-Options:
-  -g, --greeting TEXT   Greeting used by 'hello' (default: Hello)
-      --shout           Print the greeting in upper case
-  -v, --verbose         Print diagnostic messages to stderr
-  -h, --help            Show this help and exit
-  -V, --version         Show the version and exit
+$ echo 'Hello, World' | build/tr a-z A-Z
+HELLO, WORLD
+$ echo 'Hello, World' | build/tr '[:lower:][:upper:]' '[:upper:][:lower:]'
+hELLO, wORLD
+$ echo 'one, two  three!' | build/tr -cs '[:alpha:]' '\n'
+one
+two
+three
+$ echo 'phone: +1 (555) 010-9999' | build/tr -cd '[:digit:]\n'
+15550109999
+$ echo 'too    many   spaces' | build/tr -s ' '
+too many spaces
+$ echo 'abcdef' | build/tr a-f '[x*2][y*]z'
+xxyyyz
+$ echo 'héllo wörld' | build/tr 'éö' 'eo'
+hello world
+$ echo 'abc' | build/tr 'a-c' 'αβγ'
+αβγ
+$ build/tr a-z '[:upper:]'; echo "exit $?"
+tr: misaligned [:upper:] and/or [:lower:] construct
+exit 1
+$ build/tr a; echo "exit $?"
+tr: missing operand after 'a'
+Two strings must be given when translating.
+Try 'tr --help' for more information.
+exit 1
+$ build/tr --version
+tr (loup-cmd-tr) 0.1.0
 ```
 
-Exit status: `0` success, `1` runtime failure, `2` usage error.
+`tr [OPTION]... SET1 [SET2]` reads standard input only. Options:
+
+| Option | Meaning |
+|---|---|
+| `-c`, `-C`, `--complement` | use every character not in SET1, in ascending order |
+| `-d`, `--delete` | delete the characters of SET1 instead of translating |
+| `-s`, `--squeeze-repeats` | squeeze runs of a character of the last SET given into one, after translating or deleting |
+| `-t`, `--truncate-set1` | cut SET1 to the length of SET2 instead of extending SET2 |
+| `--help`, `--version` | print help or the version and exit |
+
+What the operands mean:
+
+| Command | Effect |
+|---|---|
+| `tr SET1 SET2` | translate each character of SET1 to the one at the same place in SET2 (SET2 is extended by repeating its last character) |
+| `tr -d SET1` | delete SET1 |
+| `tr -s SET1` | squeeze SET1 |
+| `tr -s SET1 SET2` | translate, then squeeze SET2 |
+| `tr -ds SET1 SET2` | delete SET1, then squeeze SET2 |
+
+The SET language:
+
+| Notation | Meaning |
+|---|---|
+| `\\ \a \b \f \n \r \t \v` | backslash and control characters; any other `\c` is `c` taken literally (`\-` is a plain dash) |
+| `\NNN` | the character with octal value NNN (1 to 3 digits, up to `\377`) |
+| `CHAR1-CHAR2` | the characters from CHAR1 to CHAR2 in ascending order |
+| `[:alnum:]` `[:alpha:]` `[:blank:]` `[:cntrl:]` `[:digit:]` `[:graph:]` `[:lower:]` `[:print:]` `[:punct:]` `[:space:]` `[:upper:]` `[:xdigit:]` | character classes (ASCII); `[:lower:]` facing `[:upper:]` converts case |
+| `[=C=]` | the character C |
+| `[C*N]` | N copies of C (N octal if it starts with 0) |
+| `[C*]` | in SET2, copies of C up to the length of SET1 |
+
+Options must come before the SETs: the first operand ends the options, so
+`tr l -d` translates `l` to `-`. Short options may be combined (`-cs`) and
+long ones shortened (`--comp`).
+
+Exit status: `0` on success; `1` on a usage error, an invalid SET, or a
+read error, as in GNU tr.
+
+## Differences from the original
+
+- **Characters, not bytes.** Input is decoded as UTF-8 and every Unicode
+  character counts as one character, in the input and in the SETs, so
+  `tr 'éö' 'eo'` turns `héllo wörld` into `hello world`. GNU tr 9.5 works on
+  bytes: it pairs the bytes of the UTF-8 encodings and prints
+  `hoollo woorld`. Ranges of non-ASCII characters (`α-ω`) work. ASCII input
+  gives exactly GNU's output.
+- `\NNN` is the character with that code point (U+0000 to U+00FF), not a
+  byte: `tr a '\351'` writes `é`, and `tr -d '\200-\377'` deletes the
+  characters U+0080 to U+00FF rather than every byte of a multibyte
+  character (keep ASCII only with `tr -cd '\000-\177'`, which works the
+  same in both).
+- Bytes that are not well-formed UTF-8 are passed through unchanged. They
+  belong to no SET, only to complements: `tr -c 'a-z' '?'` replaces each of
+  them with `?`, as GNU does.
+- The classes hold ASCII characters only, as in GNU tr, whose classes are
+  byte classes; `[:upper:]` does not include `À`.
+- A repeat count in `[c*n]` must fit in a signed 64-bit integer (GNU
+  allows up to 2^64 - 2).
+- Standard input is read whole before any output (Loup 1.26.0 has no
+  streaming reader), so `tr` cannot work on an endless stream.
+- Messages use the C locale's quotes (`'x'`, not `‘x’`); non-ASCII
+  characters in them are printed as they are rather than as octal escapes.
+- `--version` prints a single line; `--help` omits GNU's links to its
+  online documentation and adds a note on characters.
 
 ## Layout
 
 ```text
-package.lppkg            # Loup manifest
-Makefile                 # run, check, test, build, ci, clean
-source/                  # the application's Loup code
-├── main.loup            # entry point
-├── cli/                 # argument parsing, help text, command dispatch
-└── commands/            # one module per command
-tests/                   # *_test.loup files
-specs/                   # feature specs: requirements, design, tasks
-skills/loup-programmer/  # agent skill for writing Loup
+source/main.loup              # entry point
+source/appinfo.loup           # name, version, exit statuses
+source/cli/getopt.loup        # GNU getopt_long work-alike, with getopt's "+" mode
+source/cli/args.loup          # tr's options and operand-count rules
+source/cli/quote.loup         # GNU-style quoting and escaping in messages
+source/cli/usage.loup         # --help and --version text
+source/cli/app.loup           # run(): parse, plan, warnings, exit status
+source/commands/utf8.loup     # UTF-8 decoding and encoding; raw bytes
+source/commands/escapes.loup  # backslash escapes in SETs
+source/commands/sets.loup     # SET parsing into elements; cursor; classes
+source/commands/charset.loup  # sets of characters as sorted ranges
+source/commands/plan.loup     # validation and the delete, squeeze and translation tables
+source/commands/tr.loup       # the filter; reading and writing
+tests/*_test.loup             # unit tests (make test)
+tests/e2e.sh                  # end-to-end tests of build/tr (make e2e)
+specs/tr/                     # requirements, design, tasks
 ```
 
-[AGENTS.md](AGENTS.md) has the full layout, every build and test command, and
-the steps for adding a command.
-
-## Notes on the toolchain
-
-- On Linux x86-64, `loup` is the self-hosted driver and `loup-bootstrap` is
-  Stage0. `check` and `test` use `loup-bootstrap`; on other platforms both
-  names run the same tool. The Makefile handles this.
-- Modules import each other by their path under `source/`
-  (`from cli.args import (Options);`). Tests import them the same way, which
-  is why `make test` puts `source/` on `LOUPPATH`.
-- The Wasm build (`loup-bootstrap build`) is experimental: modules that use
-  `i"..."` interpolation build but trap at run time, so this template builds
-  native binaries.
+[AGENTS.md](AGENTS.md) has every build and test command and the conventions
+for changing the code.

@@ -1,0 +1,73 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from cli.getopt import (OptSpec, Scan, opt, scan_options);
+
+func specs(): list[OptSpec] {
+    return [
+        opt("a", "all", false, "a"),
+        opt("n", "number", true, "n"),
+        opt("", "count", false, "count"),
+        opt("", "complement", false, "complement"),
+        opt("", "help", false, "help"),
+    ];
+}
+
+func scan(argv: list[string], in_order: bool): Scan {
+    return scan_options(argv, specs(), in_order).unwrap();
+}
+
+func error_of(argv: list[string]): string {
+    return scan_options(argv, specs(), false).unwrap_err();
+}
+
+func test_in_order_stops_at_first_operand(): void {
+    let s = scan(["-a", "x", "-a", "--count"], true);
+    expectEq(s.hits.len(), 1, "one option");
+    expectEq(s.operands.len(), 3, "the rest are operands");
+    expectEq(s.operands[1], "-a", "dash word kept");
+}
+
+func test_permuted_mixes_options_and_operands(): void {
+    let s = scan(["x", "-a", "y"], false);
+    expectEq(s.hits.len(), 1, "one option");
+    expectEq(s.hits[0].hit_key, "a", "key");
+    expectEq(s.operands.len(), 2, "two operands");
+}
+
+func test_values(): void {
+    let s = scan(["-n3", "-an", "4", "--number=5", "--number", "6"], false);
+    expectEq(s.hits.len(), 5, "five hits");
+    expectEq(s.hits[0].hit_value, "3", "attached");
+    expectEq(s.hits[2].hit_value, "4", "next argument after a cluster");
+    expectEq(s.hits[3].hit_value, "5", "--name=value");
+    expectEq(s.hits[4].hit_value, "6", "--name value");
+}
+
+func test_double_dash_and_lone_dash(): void {
+    let s = scan(["-", "--", "-a"], false);
+    expectEq(s.hits.len(), 0, "no options");
+    expectEq(s.operands.len(), 2, "two operands");
+    expectEq(s.operands[0], "-", "lone dash");
+    expectEq(s.operands[1], "-a", "after --");
+}
+
+func test_abbreviations(): void {
+    expectEq(scan(["--al"], false).hits[0].hit_key, "a", "prefix");
+    expectEq(scan(["--count"], false).hits[0].hit_key, "count", "exact");
+}
+
+func test_help_stops_scanning(): void {
+    let s = scan(["--help", "-x"], false);
+    expectEq(s.hits.len(), 1, "stopped at --help");
+}
+
+func test_errors(): void {
+    expectEq(error_of(["-x"]), "invalid option -- 'x'", "unknown letter");
+    expectEq(error_of(["--nope"]), "unrecognized option '--nope'", "unknown name");
+    expectEq(error_of(["--co"]), "option '--co' is ambiguous; possibilities: '--count' '--complement'", "ambiguous");
+    expectEq(error_of(["--all=1"]), "option '--all' doesn't allow an argument", "no argument allowed");
+    expectEq(error_of(["-n"]), "option requires an argument -- 'n'", "missing value");
+    expectEq(error_of(["--number"]), "option '--number' requires an argument", "missing long value");
+    expect(scan_options(["-a"], specs(), true).is_ok(), "fine");
+}

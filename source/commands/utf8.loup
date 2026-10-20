@@ -1,0 +1,149 @@
+@mode(host.dual)
+
+# Characters as integers. tr works on Unicode code points: standard input
+# is read as bytes and decoded here, and the result is encoded back. A byte
+# that is not part of well-formed UTF-8 becomes the "raw" code
+# RAW_BASE + byte, above every code point, so that it passes through
+# unchanged and is written back as the same byte.
+
+# The first raw code (raw byte 0).
+pub const RAW_BASE: int = 1114112;
+
+# Every code tr can see: the code points 0..10FFFF, then the 256 raw bytes.
+pub const DOMAIN_SIZE: int = 1114368;
+
+# U+FFFD, for the rare argument that is not valid UTF-8.
+pub const REPLACEMENT: int = 65533;
+
+# The code point of a one-character string.
+pub func code_of(ch: string): int {
+    match char.fromString(ch) {
+        Some(c) => {
+            return c.toInt();
+        },
+        None => {
+            return REPLACEMENT;
+        },
+    }
+    return REPLACEMENT;
+}
+
+# The code points of a string, one per character.
+pub func codes_of(text: string): list[int] {
+    var out: list[int] = [];
+    for (ch in text) {
+        out.push(code_of(ch));
+    }
+    return out;
+}
+
+# The one-character string for a code point (raw codes become U+FFFD).
+pub func char_text(code: int): string {
+    if (code < 0 or code >= RAW_BASE or (code >= 55296 and code <= 57343)) {
+        return str(char.of(REPLACEMENT));
+    }
+    return str(char.of(code));
+}
+
+# The string for a list of code points.
+pub func text_of(codes: list[int]): string {
+    var parts: list[string] = [];
+    for (code in codes) {
+        parts.push(char_text(code));
+    }
+    return parts.join("");
+}
+
+# Decodes the characters of `data` that start at `start` and before `limit`
+# (the last one may end after `limit`) and appends their codes to `units`.
+# Returns the index of the first byte not decoded. Overlong forms,
+# surrogates, code points above 10FFFF and stray or truncated sequences are
+# not well-formed: each of their bytes becomes a raw code of its own.
+pub func decode_into(data: bytes, start: int, limit: int, edits units: list[int]): int {
+    let n = data.len();
+    let stop = if (limit < n) { limit } else { n };
+    var i = start;
+    while (i < stop) {
+        let b = data[i];
+        if (b < 128) {
+            units.push(b);
+            i += 1;
+            continue;
+        }
+        var need = 0;
+        var lo = 128;
+        var hi = 191;
+        var code = 0;
+        if (b >= 194 and b <= 223) {
+            need = 1;
+            code = b - 192;
+        } else if (b >= 224 and b <= 239) {
+            need = 2;
+            code = b - 224;
+            if (b == 224) {
+                lo = 160;
+            } else if (b == 237) {
+                hi = 159;
+            }
+        } else if (b >= 240 and b <= 244) {
+            need = 3;
+            code = b - 240;
+            if (b == 240) {
+                lo = 144;
+            } else if (b == 244) {
+                hi = 143;
+            }
+        }
+        var ok = need > 0 and i + need < n;
+        var k = 1;
+        while (ok and k <= need) {
+            let c = data[i + k];
+            if (c < lo or c > hi) {
+                ok = false;
+            } else {
+                code = code * 64 + (c - 128);
+            }
+            lo = 128;
+            hi = 191;
+            k += 1;
+        }
+        if (ok) {
+            units.push(code);
+            i += need + 1;
+        } else {
+            units.push(RAW_BASE + b);
+            i += 1;
+        }
+    }
+    return i;
+}
+
+# Appends the bytes of one code to `out`: its UTF-8 form, or the byte
+# itself for a raw code. Returns false when those bytes are not well-formed
+# UTF-8 (a raw byte or a surrogate), true otherwise.
+pub func encode_into(code: int, edits out: list[int]): bool {
+    if (code < 128) {
+        out.push(code);
+        return true;
+    }
+    if (code < 2048) {
+        out.push(192 + code / 64);
+        out.push(128 + code % 64);
+        return true;
+    }
+    if (code < 65536) {
+        out.push(224 + code / 4096);
+        out.push(128 + (code / 64) % 64);
+        out.push(128 + code % 64);
+        return code < 55296 or code > 57343;
+    }
+    if (code < RAW_BASE) {
+        out.push(240 + code / 262144);
+        out.push(128 + (code / 4096) % 64);
+        out.push(128 + (code / 64) % 64);
+        out.push(128 + code % 64);
+        return true;
+    }
+    out.push(code - RAW_BASE);
+    return false;
+}

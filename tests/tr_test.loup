@@ -1,0 +1,61 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from cli.args import (parse_args);
+from commands.plan import (Plan, make_plan);
+from commands.tr import (tr_text, filter_units, NOT_A_CHAR);
+from commands.utf8 import (RAW_BASE);
+
+func tr(argv: list[string], text: string): string {
+    var warnings: list[string] = [];
+    let plan = make_plan(parse_args(argv).unwrap(), edits: warnings).unwrap();
+    return tr_text(text, plan);
+}
+
+func test_translate(): void {
+    expectEq(tr(["a-z", "A-Z"], "hello, world"), "HELLO, WORLD", "ranges");
+    expectEq(tr(["abc", "x"], "aabbcc!"), "xxxxxx!", "SET2 extended with its last character");
+    expectEq(tr(["-t", "abc", "xy"], "abc"), "xyc", "-t");
+    expectEq(tr(["aa", "xy"], "a"), "y", "the last pairing wins");
+    expectEq(tr(["a-f", "[x*2][y*]z"], "abcdef"), "xxyyyz", "[c*] fills the gap");
+    expectEq(tr(["éö", "eo"], "héllo wörld"), "hello world", "Unicode characters");
+}
+
+func test_case_classes(): void {
+    expectEq(tr(["[:lower:]", "[:upper:]"], "Hello"), "HELLO", "to upper");
+    expectEq(tr(["[:upper:]", "[:lower:]"], "Hello"), "hello", "to lower");
+    expectEq(tr(["[:lower:][:upper:]", "[:upper:][:lower:]"], "aBc"), "AbC", "swap case");
+    expectEq(tr(["a[:lower:]", "X[:upper:]"], "ab"), "AB", "case conversion overrides a→X");
+    expectEq(tr(["[:upper:]", "a-z"], "ÀB"), "Àb", "ASCII only");
+}
+
+func test_complement(): void {
+    expectEq(tr(["-c", "a-z", "X"], "hi, you!"), "hiXXyouX", "-c");
+    expectEq(tr(["-c", "a", "0-9"], "ab1\n"), "a999", "complement in ascending order");
+    expectEq(tr(["-cs", "[:alpha:]", "\\n"], "one, two  three!"), "one\ntwo\nthree\n", "words, one per line");
+}
+
+func test_delete_and_squeeze(): void {
+    expectEq(tr(["-d", "[:digit:]"], "a1b22c333"), "abc", "-d");
+    expectEq(tr(["-cd", "[:digit:]"], "a1b22c333"), "122333", "-cd");
+    expectEq(tr(["-s", " "], "a  b   c"), "a b c", "-s");
+    expectEq(tr(["-s", "a-z"], "aabbcc  dd"), "abc  d", "-s only squeezes SET1");
+    expectEq(tr(["-ds", "b", "a"], "abba"), "a", "-ds squeezes after deleting");
+    expectEq(tr(["-s", "a-d", "xxyy"], "aabbccdd"), "xy", "-s with translation squeezes SET2");
+}
+
+func test_raw_bytes(): void {
+    var warnings: list[string] = [];
+    let plan = make_plan(parse_args(["-c", "a", "?"]).unwrap(), edits: warnings).unwrap();
+    let out = filter_units([97, RAW_BASE + 255], plan, NOT_A_CHAR);
+    expectEq(out[1], 63, "a raw byte is in the complement");
+    let kept = filter_units([RAW_BASE + 255], make_plan(parse_args(["a-z", "A-Z"]).unwrap(), edits: warnings).unwrap(), NOT_A_CHAR);
+    expectEq(kept[0], RAW_BASE + 255, "and passes through otherwise");
+}
+
+func test_squeeze_carries_over(): void {
+    var warnings: list[string] = [];
+    let plan = make_plan(parse_args(["-s", "a"]).unwrap(), edits: warnings).unwrap();
+    let out = filter_units([97, 98], plan, 97);
+    expectEq(out.len(), 1, "the a continues the previous chunk's run");
+}

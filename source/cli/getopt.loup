@@ -1,0 +1,188 @@
+@mode(host.dual)
+
+# A small work-alike of GNU getopt_long, which the coreutils use to read
+# their options. Loup 1.26 has no CLI library, so this is written by hand.
+#
+# The rules are getopt_long's:
+# - Options and operands may be mixed, unless `in_order` is set (getopt's
+#   "+" mode, which tr uses): then the first operand ends the options.
+#   `--` always ends the options, and `-` on its own is an operand.
+# - Short options cluster (`-cs`). A short option that takes a value uses
+#   the rest of its argument, or else the next argument (`-f2`, `-f 2`).
+# - Long options take `--name=value` or `--name value` and may be shortened
+#   to any unambiguous prefix; an exact name always wins.
+# - Scanning stops at the `help` and `version` keys, so that, as with
+#   getopt, `--help` wins over any error that comes after it.
+# Errors are getopt's messages, without the program name.
+#
+# Field names are unique across the program's structs: the native build
+# lays out struct fields by name, program-wide (see NATIVE-NOTES.md).
+
+# One option: its letter ("" if none), its long name without dashes ("" if
+# none), whether it takes a value, and the key reported when it is seen.
+pub struct OptSpec {
+    pub letter: string;
+    pub long_name: string;
+    pub takes_value: bool;
+    pub key: string;
+}
+
+# One option found on the command line, with its value ("" if it takes none).
+pub struct OptHit {
+    pub hit_key: string;
+    pub hit_value: string;
+}
+
+# The options in the order they were given, and the operands.
+pub struct Scan {
+    pub hits: list[OptHit];
+    pub operands: list[string];
+}
+
+# Shorthand for an OptSpec.
+pub func opt(letter: string, long_name: string, takes_value: bool, key: string): OptSpec {
+    return OptSpec(letter = letter, long_name = long_name, takes_value = takes_value, key = key);
+}
+
+func is_stop(key: string): bool {
+    return key == "help" or key == "version";
+}
+
+func done(hits: list[OptHit], operands: list[string]): Scan {
+    return Scan(hits = hits, operands = operands);
+}
+
+func hit(key: string, value: string): OptHit {
+    return OptHit(hit_key = key, hit_value = value);
+}
+
+# The index of the spec with letter `letter`, or -1.
+func find_short(letter: string, specs: list[OptSpec]): int {
+    var i = 0;
+    while (i < specs.len()) {
+        if (specs[i].letter.len() > 0 and specs[i].letter == letter) {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+# The indexes of the specs whose long name starts with `name`, or only the
+# exact match when there is one.
+func find_long(name: string, specs: list[OptSpec]): list[int] {
+    var found: list[int] = [];
+    var i = 0;
+    while (i < specs.len()) {
+        let long_name = specs[i].long_name;
+        if (long_name.len() > 0) {
+            if (long_name == name) {
+                return [i];
+            }
+            if (long_name.startsWith(name)) {
+                found.push(i);
+            }
+        }
+        i += 1;
+    }
+    return found;
+}
+
+pub func scan_options(argv: list[string], specs: list[OptSpec], in_order: bool): Result[Scan, string] {
+    var hits: list[OptHit] = [];
+    var operands: list[string] = [];
+    var i = 0;
+    while (i < argv.len()) {
+        let arg = argv[i];
+        i += 1;
+
+        if (arg == "--") {
+            while (i < argv.len()) {
+                operands.push(argv[i]);
+                i += 1;
+            }
+            break;
+        }
+
+        if (arg.len() < 2 or !arg.startsWith("-")) {
+            operands.push(arg);
+            if (in_order) {
+                while (i < argv.len()) {
+                    operands.push(argv[i]);
+                    i += 1;
+                }
+                break;
+            }
+            continue;
+        }
+
+        if (arg.startsWith("--")) {
+            let body = arg.slice(2);
+            let eq = body.index_of("=");
+            let name = if (eq >= 0) { body.slice(0, eq) } else { body };
+            let found = find_long(name, specs);
+            if (found.len() == 0) {
+                return Err(i"unrecognized option '{$ arg $}'");
+            }
+            if (found.len() > 1) {
+                var names: list[string] = [];
+                for (k in found) {
+                    names.push("'--" + specs[k].long_name + "'");
+                }
+                return Err(i"option '{$ arg $}' is ambiguous; possibilities: {$ names.join(" ") $}");
+            }
+            let spec = specs[found[0]];
+            var value = "";
+            if (spec.takes_value) {
+                if (eq >= 0) {
+                    value = body.slice(eq + 1);
+                } else if (i < argv.len()) {
+                    value = argv[i];
+                    i += 1;
+                } else {
+                    return Err(i"option '--{$ spec.long_name $}' requires an argument");
+                }
+            } else if (eq >= 0) {
+                return Err(i"option '--{$ spec.long_name $}' doesn't allow an argument");
+            }
+            hits.push(hit(spec.key, value));
+            if (is_stop(spec.key)) {
+                return Ok(done(hits, operands));
+            }
+            continue;
+        }
+
+        # A cluster of short options.
+        var letters: list[string] = [];
+        for (ch in arg) {
+            letters.push(ch);
+        }
+        var j = 1;
+        while (j < letters.len()) {
+            let letter = letters[j];
+            j += 1;
+            let k = find_short(letter, specs);
+            if (k < 0) {
+                return Err(i"invalid option -- '{$ letter $}'");
+            }
+            let spec = specs[k];
+            var value = "";
+            if (spec.takes_value) {
+                if (j < letters.len()) {
+                    value = arg.slice(j);
+                    j = letters.len();
+                } else if (i < argv.len()) {
+                    value = argv[i];
+                    i += 1;
+                } else {
+                    return Err(i"option requires an argument -- '{$ letter $}'");
+                }
+            }
+            hits.push(hit(spec.key, value));
+            if (is_stop(spec.key)) {
+                return Ok(done(hits, operands));
+            }
+        }
+    }
+    return Ok(done(hits, operands));
+}

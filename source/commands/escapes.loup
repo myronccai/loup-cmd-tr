@@ -1,0 +1,116 @@
+@mode(host.dual)
+
+# Backslash escapes in a SET operand: GNU tr's unquote(). The result keeps,
+# for each character, whether it came from an escape, because an escaped
+# character never takes part in a `[:class:]`, `[=c=]`, `[c*n]` or `a-z`
+# construct (`\-` is a plain dash).
+
+from commands.utf8 import (codes_of);
+
+# The decoded characters of an operand and their escaped flags.
+pub class Unquoted {
+    pub var chars: list[int] = [];
+    pub var escaped: list[bool] = [];
+
+    pub modifier func add(code: int, was_escaped: bool): void {
+        this.chars.push(code);
+        this.escaped.push(was_escaped);
+    }
+}
+
+func octal_digit(code: int): int {
+    if (code >= 48 and code <= 55) {
+        return code - 48;
+    }
+    return -1;
+}
+
+# The value of a one-letter escape such as `\n`, or -1.
+func letter_value(code: int): int {
+    if (code == 97) {
+        return 7;
+    }
+    if (code == 98) {
+        return 8;
+    }
+    if (code == 102) {
+        return 12;
+    }
+    if (code == 110) {
+        return 10;
+    }
+    if (code == 114) {
+        return 13;
+    }
+    if (code == 116) {
+        return 9;
+    }
+    if (code == 118) {
+        return 11;
+    }
+    return -1;
+}
+
+func digit_text(code: int): string {
+    return str(char.of(code));
+}
+
+# Decodes the escapes of `operand`. GNU's warnings (a lone backslash at the
+# end, an octal escape above \377) are appended to `warnings`.
+pub func unquote(operand: string, edits warnings: list[string]): Unquoted {
+    let s = codes_of(operand);
+    let n = s.len();
+    let out = Unquoted();
+    var i = 0;
+    while (i < n) {
+        let c = s[i];
+        if (c != 92) {
+            safe {
+                out.add(c, false);
+            }
+            i += 1;
+            continue;
+        }
+        if (i + 1 >= n) {
+            warnings.push("warning: an unescaped backslash at end of string is not portable");
+            safe {
+                out.add(92, false);
+            }
+            i += 1;
+            continue;
+        }
+        let next = s[i + 1];
+        var value = next;
+        var used = 2;
+        let letter = letter_value(next);
+        if (letter >= 0) {
+            value = letter;
+        } else if (octal_digit(next) >= 0) {
+            # Up to three octal digits, as long as the value fits in a byte.
+            value = octal_digit(next);
+            if (i + 2 < n and octal_digit(s[i + 2]) >= 0) {
+                value = value * 8 + octal_digit(s[i + 2]);
+                used = 3;
+                if (i + 3 < n and octal_digit(s[i + 3]) >= 0) {
+                    let wide = value * 8 + octal_digit(s[i + 3]);
+                    if (wide < 256) {
+                        value = wide;
+                        used = 4;
+                    } else {
+                        let d1 = digit_text(s[i + 1]);
+                        let d2 = digit_text(s[i + 2]);
+                        let d3 = digit_text(s[i + 3]);
+                        warnings.push("warning: the ambiguous octal escape \\" + d1 + d2 + d3
+                            + " is being\n\tinterpreted as the 2-byte sequence \\0" + d1 + d2
+                            + ", " + d3);
+                    }
+                }
+            }
+        }
+        safe {
+            out.add(value, true);
+        }
+        i += used;
+    }
+    return out;
+}

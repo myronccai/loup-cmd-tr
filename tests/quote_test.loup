@@ -1,0 +1,19 @@
+@mode(host.dual)
+
+from debug.assert import (expectEq);
+from cli.quote import (quote, printable, printable_char);
+
+func test_quote(): void {
+    expectEq(quote("a"), "'a'", "plain");
+    expectEq(quote("a b"), "'a b'", "space");
+    expectEq(quote("it's"), "'it\\'s'", "apostrophe");
+    expectEq(quote("a\\b"), "'a\\\\b'", "backslash");
+    expectEq(quote("a\tb" + str(char.of(1))), "'a\\tb\\001'", "controls");
+    expectEq(quote("é"), "'é'", "non-ASCII as is");
+}
+
+func test_printable(): void {
+    expectEq(printable([97, 9, 10, 1, 92]), "a\\t\\n\\001\\", "escapes and octal");
+    expectEq(printable_char(10), "\\012", "char: octal only");
+    expectEq(printable_char(122), "z", "char: plain");
+}

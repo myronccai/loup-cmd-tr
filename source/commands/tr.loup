@@ -1,0 +1,114 @@
+@mode(host.dual)
+
+# tr itself: delete or translate each character, then squeeze repeats.
+# Standard input is read whole (Loup has no streaming reader), decoded and
+# processed in chunks, and each chunk's output is written as it is ready.
+
+import io.fs as fs;
+from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE);
+from commands.plan import (Plan);
+from commands.utf8 import (codes_of, text_of, decode_into, encode_into);
+
+# Output that is not well-formed UTF-8 (raw bytes passed through) cannot be
+# a Loup string, so it goes out through C's putchar. Only a native build
+# can call it; `loup run` stops there ("unsupported instruction").
+extern native "c" func putchar(c: int32): int32;
+extern native "c" func fflush(stream: int): int32;
+
+# "No previous character" for squeezing.
+pub const NOT_A_CHAR: int = -1;
+
+# Input bytes decoded per chunk.
+const CHUNK: int = 65536;
+
+# The output codes for some input codes. `last` is the last code written
+# before them (NOT_A_CHAR at the start), so that squeezing carries over
+# from one chunk to the next.
+pub func filter_units(units: list[int], plan: Plan, last: int): list[int] {
+    var out: list[int] = [];
+    filter_into(units, plan, last, edits: out);
+    return out;
+}
+
+# As filter_units, appending to `out`.
+pub func filter_into(units: list[int], plan: Plan, last: int, edits out: list[int]): void {
+    var prev = last;
+    for (u in units) {
+        var c = u;
+        if (plan.deleting) {
+            if (plan.delete_set.contains(c)) {
+                continue;
+            }
+        } else if (plan.translating) {
+            c = plan.translate(c);
+        }
+        if (plan.squeezing and c == prev and plan.squeeze_set.contains(c)) {
+            continue;
+        }
+        out.push(c);
+        prev = c;
+    }
+}
+
+# tr applied to a whole string (for tests and examples).
+pub func tr_text(text: string, plan: Plan): string {
+    return text_of(filter_units(codes_of(text), plan, NOT_A_CHAR));
+}
+
+# Empties a list but keeps its storage (`clear()` has no native lowering
+# in Loup 1.26.0).
+func empty(edits xs: list[int]): void {
+    while (xs.len() > 0) {
+        xs.pop();
+    }
+}
+
+# Writes codes to standard output as UTF-8 (raw codes as their bytes).
+# `buf` is scratch space, reused between calls.
+func write_codes(codes: list[int], edits buf: list[int]): void {
+    empty(edits: buf);
+    var clean = true;
+    for (code in codes) {
+        if (!encode_into(code, edits: buf)) {
+            clean = false;
+        }
+    }
+    if (clean) {
+        print(bytesFromInts(buf).decode());
+        return;
+    }
+    for (b in buf) {
+        putchar(b as int32);
+    }
+    # Flush C's buffer (fflush(NULL)) so that later output stays in order.
+    fflush(0);
+}
+
+pub func run_tr(plan: Plan): int {
+    # The native runtime returns nothing for a directory and cannot catch
+    # read errors, so check first, as GNU tr's read would fail.
+    if (fs.isDir("/dev/stdin")) {
+        printErr(i"{$ APP_NAME $}: read error: Is a directory");
+        return EXIT_FAILURE;
+    }
+    let data = readBytes("/dev/stdin");
+    let n = data.len();
+    var pos = 0;
+    var last = NOT_A_CHAR;
+    # The same three lists serve every chunk: the native runtime does not
+    # free lists, so new ones per chunk would cost memory.
+    var units: list[int] = [];
+    var out: list[int] = [];
+    var buf: list[int] = [];
+    while (pos < n) {
+        empty(edits: units);
+        empty(edits: out);
+        pos = decode_into(data, pos, pos + CHUNK, edits: units);
+        filter_into(units, plan, last, edits: out);
+        if (out.len() > 0) {
+            last = out[out.len() - 1];
+            write_codes(out, edits: buf);
+        }
+    }
+    return EXIT_OK;
+}

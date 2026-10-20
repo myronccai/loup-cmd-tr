@@ -1,98 +1,108 @@
 @mode(host.dual)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
-#
-# Grammar: [OPTIONS] COMMAND [OPERANDS...]
-#   Options may appear anywhere before `--`; everything after `--` is an
-#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+# Command-line parsing for tr. Options are scanned with getopt's rules in
+# its "+" mode, as GNU tr does: the first operand ends the options, so in
+# `tr a -d` the `-d` is STRING2. Then the number of operands is checked
+# against the options, with GNU tr's messages.
 
-pub const DEFAULT_GREETING: string = "Hello";
+from cli.getopt import (OptSpec, opt, scan_options);
+from cli.quote import (quote);
 
-pub struct Options {
-    pub command: string;
-    pub operands: list[string];
-    pub help: bool;
-    pub version: bool;
-    pub verbose: bool;
-    pub shout: bool;
-    pub greeting: string;
+# A class, not a struct: it is built here and read in other modules, and
+# classes keep their layout across modules in native builds.
+pub class Options {
+    pub var help: bool = false;
+    pub var version: bool = false;
+    pub var complement: bool = false;
+    pub var delete_chars: bool = false;
+    pub var squeeze_repeats: bool = false;
+    pub var truncate_set1: bool = false;
+    pub var set1: string = "";
+    pub var set2: string = "";
+    pub var has_set2: bool = false;
+
+    # Whether tr translates: STRING2 is given and -d is not.
+    pub func translating(): bool {
+        return this.has_set2 and !this.delete_chars;
+    }
+}
+
+func specs(): list[OptSpec] {
+    return [
+        opt("c", "complement", false, "c"),
+        opt("C", "", false, "c"),
+        opt("d", "delete", false, "d"),
+        opt("s", "squeeze-repeats", false, "s"),
+        opt("t", "truncate-set1", false, "t"),
+        # Undocumented in GNU tr (AIX compatibility: the C locale); a no-op here.
+        opt("A", "", false, "A"),
+        opt("", "help", false, "help"),
+        opt("", "version", false, "version"),
+    ];
 }
 
 pub func parse_args(argv: list[string]): Result[Options, string] {
-    var command = "";
-    var operands: list[string] = [];
-    var help = false;
-    var version = false;
-    var verbose = false;
-    var shout = false;
-    var greeting = DEFAULT_GREETING;
-    var only_operands = false;
+    let scan = match scan_options(argv, specs(), true) {
+        Ok(s) => s,
+        Err(msg) => {
+            return Err(msg);
+        },
+    };
 
-    var i = 0;
-    while (i < argv.len()) {
-        let arg = argv[i];
-        i += 1;
-
-        if (only_operands or arg == "-" or !arg.startsWith("-")) {
-            if (command.is_empty()) {
-                command = arg;
-            } else {
-                operands.push(arg);
+    let opts = Options();
+    for (h in scan.hits) {
+        let key = h.hit_key;
+        safe {
+            if (key == "help") {
+                opts.help = true;
+            } else if (key == "version") {
+                opts.version = true;
+            } else if (key == "c") {
+                opts.complement = true;
+            } else if (key == "d") {
+                opts.delete_chars = true;
+            } else if (key == "s") {
+                opts.squeeze_repeats = true;
+            } else if (key == "t") {
+                opts.truncate_set1 = true;
             }
-            continue;
         }
-        if (arg == "--") {
-            only_operands = true;
-            continue;
-        }
-
-        # Split `--name=value` into its name and inline value.
-        var name = arg;
-        var inline_value: Option[string] = None;
-        if (arg.startsWith("--") and arg.contains("=")) {
-            let parts = arg.split("=");
-            name = parts[0];
-            inline_value = Some(parts.slice(1).join("="));
-        }
-
-        if (name == "-g" or name == "--greeting") {
-            match inline_value {
-                Some(v) => { greeting = v; },
-                None => {
-                    if (i >= argv.len()) {
-                        return Err(i"option '{$ name $}' requires a value");
-                    }
-                    greeting = argv[i];
-                    i += 1;
-                },
-            }
-            continue;
-        }
-
-        if (inline_value.is_some()) {
-            return Err(i"option '{$ name $}' does not take a value");
-        }
-        if (name == "-h" or name == "--help") {
-            help = true;
-        } else if (name == "-V" or name == "--version") {
-            version = true;
-        } else if (name == "-v" or name == "--verbose") {
-            verbose = true;
-        } else if (name == "--shout") {
-            shout = true;
-        } else {
-            return Err(i"unknown option '{$ name $}'");
+        if (opts.help or opts.version) {
+            return Ok(opts);
         }
     }
 
-    return Ok(Options(
-        command = command,
-        operands = operands,
-        help = help,
-        version = version,
-        verbose = verbose,
-        shout = shout,
-        greeting = greeting,
-    ));
+    # GNU: -d and -s together, or neither, need two strings; -d alone takes
+    # one; -s alone takes one or two.
+    let operands = scan.operands;
+    let n = operands.len();
+    let both_or_neither = opts.delete_chars == opts.squeeze_repeats;
+    let min_operands = if (both_or_neither) { 2 } else { 1 };
+    let max_operands = if (opts.delete_chars and !opts.squeeze_repeats) { 1 } else { 2 };
+    if (n < min_operands) {
+        if (n == 0) {
+            return Err("missing operand");
+        }
+        let why = if (opts.squeeze_repeats) {
+            "Two strings must be given when both deleting and squeezing repeats."
+        } else {
+            "Two strings must be given when translating."
+        };
+        return Err("missing operand after " + quote(operands[n - 1]) + "\n" + why);
+    }
+    if (n > max_operands) {
+        var msg = "extra operand " + quote(operands[max_operands]);
+        if (n == 2) {
+            msg = msg + "\nOnly one string may be given when deleting without squeezing repeats.";
+        }
+        return Err(msg);
+    }
+    safe {
+        opts.set1 = operands[0];
+        if (n == 2) {
+            opts.set2 = operands[1];
+            opts.has_set2 = true;
+        }
+    }
+    return Ok(opts);
 }

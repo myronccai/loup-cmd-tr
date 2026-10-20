@@ -1,0 +1,139 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.sets import (Elem, SetSpec, SetCursor, parse_set, spec_nth, homogeneous, class_members, elem_length, CASE_NONE, CASE_UPPER);
+
+func spec(text: string): SetSpec {
+    var warnings: list[string] = [];
+    return parse_set(text, edits: warnings).unwrap();
+}
+
+func error_of(text: string): string {
+    var warnings: list[string] = [];
+    return parse_set(text, edits: warnings).unwrap_err();
+}
+
+# Every character of a SET, in order.
+func expand(text: string): list[int] {
+    let s = spec(text);
+    var out: list[int] = [];
+    let cur = SetCursor(s.elems);
+    var c = 0;
+    while (c >= 0) {
+        safe {
+            c = cur.next();
+        }
+        if (c >= 0) {
+            out.push(c);
+        }
+    }
+    return out;
+}
+
+func same(a: list[int], b: list[int]): bool {
+    if (a.len() != b.len()) {
+        return false;
+    }
+    for (k in 0..a.len()) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func test_plain_and_ranges(): void {
+    expect(same(expand("a-cx"), [97, 98, 99, 120]), "range then char");
+    expect(same(expand("a-"), [97, 45]), "trailing dash");
+    expect(same(expand("-a"), [45, 97]), "leading dash");
+    expect(same(expand("a\\-c"), [97, 45, 99]), "escaped dash");
+    expect(same(expand("α-γ"), [945, 946, 947]), "Unicode range");
+}
+
+func test_classes(): void {
+    expectEq(class_members(1).len(), 52, "alpha");
+    expectEq(class_members(8).len(), 32, "punct");
+    expectEq(class_members(9).len(), 6, "space");
+    expectEq(class_members(3).len(), 33, "cntrl");
+    expect(same(expand("[:digit:]"), [48, 49, 50, 51, 52, 53, 54, 55, 56, 57]), "digits");
+    expect(same(expand("[:blank:]"), [9, 32]), "blank");
+    expect(same(expand("[:\\upper:]").slice(0, 2), [65, 66]), "escaped letters still name the class");
+}
+
+func test_equiv_and_repeats(): void {
+    expect(same(expand("[=.=]"), [46]), "equivalence class");
+    expect(same(expand("[x*3]"), [120, 120, 120]), "decimal count");
+    expect(same(expand("[x*010]").slice(0, 8), [120, 120, 120, 120, 120, 120, 120, 120]), "octal count");
+    expectEq(expand("[x*010]").len(), 8, "octal 010 is 8");
+    let s = spec("a[b*]c");
+    expectEq(s.elems.len(), 3, "three elements");
+    expectEq(elem_length(s.elems[1]), 0, "[c*] is unsized");
+}
+
+func test_brackets_that_are_not_constructs(): void {
+    expect(same(expand("[]"), [91, 93]), "[]");
+    expect(same(expand("[a*"), [91, 97, 42]), "unclosed repeat");
+    expect(same(expand("[:x"), [91, 58, 120]), "unclosed class");
+}
+
+func test_errors(): void {
+    expectEq(error_of("[:foo:]"), "invalid character class 'foo'", "unknown class");
+    expectEq(error_of("[::]"), "missing character class name '[::]'", "empty class");
+    expectEq(error_of("[==]"), "missing equivalence class character '[==]'", "empty equivalence");
+    expectEq(error_of("[=ab=]"), "ab: equivalence class operand must be a single character", "long equivalence");
+    expectEq(error_of("z-a"), "range-endpoints of 'z-a' are in reverse collating sequence order", "reversed");
+    expectEq(error_of("[a*1x]"), "invalid repeat count '1x' in [c*n] construct", "bad count");
+    expectEq(error_of("[a*09]"), "invalid repeat count '09' in [c*n] construct", "bad octal");
+    expectEq(error_of("[a*-1]"), "invalid repeat count '-1' in [c*n] construct", "negative");
+    expectEq(error_of("[a*99999999999999999999]"), "invalid repeat count '99999999999999999999' in [c*n] construct", "too large");
+}
+
+func test_stats(): void {
+    let s = spec("a-z[:upper:][=x=][y*]");
+    var problem = "";
+    safe {
+        problem = s.compute_stats();
+    }
+    expectEq(problem, "", "fits");
+    expectEq(s.length, 53, "26 + 26 + 1 + 0");
+    expect(s.has_char_class and !s.has_restricted_class, "upper is not restricted");
+    expect(s.has_equiv_class, "equivalence class");
+    expectEq(s.indefinite_repeats, 1, "one [c*]");
+    expectEq(s.indefinite_at, 3, "the fourth element");
+    let t = spec("[a*9223372036854775807][b*1]");
+    safe {
+        problem = t.compute_stats();
+    }
+    expectEq(problem, "too many characters in set", "overflow");
+}
+
+func test_nth_and_homogeneous(): void {
+    let s = spec("ab[x*5]c");
+    expectEq(spec_nth(s.elems, 0), 97, "first");
+    expectEq(spec_nth(s.elems, 4), 120, "in the repeat");
+    expectEq(spec_nth(s.elems, 7), 99, "last");
+    expectEq(spec_nth(s.elems, 8), -1, "past the end");
+    expect(homogeneous(spec("x[x*4]x-x").elems), "all x");
+    expect(!homogeneous(spec("xy").elems), "two characters");
+    expect(!homogeneous(spec("").elems), "empty");
+}
+
+func test_cursor_case_kinds(): void {
+    let cur = SetCursor(spec("a[:upper:]").elems);
+    safe {
+        cur.next();
+    }
+    expectEq(cur.kind, CASE_NONE, "a");
+    expect(cur.fresh, "next element starts");
+    safe {
+        cur.next();
+    }
+    expectEq(cur.kind, CASE_UPPER, "A");
+    expect(!cur.fresh, "inside the class");
+    var c = 0;
+    safe {
+        cur.skip_element();
+        c = cur.next();
+    }
+    expectEq(c, -1, "skipped to the end");
+}

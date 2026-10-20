@@ -1,0 +1,305 @@
+@mode(host.dual)
+
+# From options to a Plan: parse the SETs, check them the way GNU tr's
+# validate() does (same order, same messages), and build what the filter
+# needs: the delete set, the squeeze set, and the translation table.
+
+from cli.args import (Options);
+from commands.charset import (CharSet, charset_of);
+from commands.sets import (Elem, SetSpec, SetCursor, parse_set, spec_nth, homogeneous, CASE_NONE, CASE_LOWER, CASE_UPPER);
+from commands.utf8 import (DOMAIN_SIZE);
+
+# How tr treats each character. Built once, then only read.
+pub class Plan {
+    pub var deleting: bool = false;
+    pub var squeezing: bool = false;
+    pub var translating: bool = false;
+    pub var delete_set: CharSet = CharSet();
+    pub var squeeze_set: CharSet = CharSet();
+    # Translation of the codes 0..255; the others are in high_map, or,
+    # with -c, computed by complement_image().
+    var low_map: list[int] = [];
+    var high_map: dict[int, int] = {};
+    var by_complement: bool = false;
+    var s1_set: CharSet = CharSet();
+    var s2_elems: list[Elem] = [];
+    var s2_length: int = 0;
+
+    pub func translate(code: int): int {
+        if (code >= 0 and code < 256) {
+            return this.low_map[code];
+        }
+        if (this.by_complement) {
+            return this.complement_image(code);
+        }
+        if (this.high_map.containsKey(code)) {
+            return this.high_map[code];
+        }
+        return code;
+    }
+
+    # With -c, the characters outside SET1, in ascending order, map to the
+    # characters of SET2 in order (GNU's xlate loop for the complement).
+    func complement_image(code: int): int {
+        if (this.s1_set.contains(code)) {
+            return code;
+        }
+        let k = code - this.s1_set.count_below(code);
+        if (k >= this.s2_length) {
+            return code;
+        }
+        return spec_nth(this.s2_elems, k);
+    }
+
+    modifier func map_one(src: int, dst: int): void {
+        if (src >= 0 and src < 256) {
+            this.low_map[src] = dst;
+        } else {
+            this.high_map[src] = dst;
+        }
+    }
+
+    # The translation table for SET1 and SET2 without -c: characters are
+    # paired in order, and [:lower:] against [:upper:] converts case.
+    modifier func pair_sets(s1: list[Elem], s2: list[Elem]): void {
+        let cur1 = SetCursor(s1);
+        let cur2 = SetCursor(s2);
+        while (true) {
+            var c1 = -1;
+            var c2 = -1;
+            safe {
+                c1 = cur1.next();
+                c2 = cur2.next();
+            }
+            let k1 = cur1.kind;
+            let k2 = cur2.kind;
+            if (k1 == CASE_LOWER and k2 == CASE_UPPER) {
+                for (c in 97..123) {
+                    this.map_one(c, c - 32);
+                }
+            } else if (k1 == CASE_UPPER and k2 == CASE_LOWER) {
+                for (c in 65..91) {
+                    this.map_one(c, c + 32);
+                }
+            } else {
+                if (c1 < 0 or c2 < 0) {
+                    break;
+                }
+                this.map_one(c1, c2);
+            }
+            if (k2 != CASE_NONE) {
+                safe {
+                    cur1.skip_element();
+                    cur2.skip_element();
+                }
+            }
+        }
+    }
+
+    # The translation for -c: the codes 0..255 now, the others on demand.
+    modifier func complement_sets(s1: list[Elem], s2: list[Elem], length2: int): void {
+        this.by_complement = true;
+        this.s1_set = charset_of(s1, false);
+        this.s2_elems = s2;
+        this.s2_length = length2;
+        for (code in 0..256) {
+            this.low_map[code] = this.complement_image(code);
+        }
+    }
+
+    pub modifier func setup(opts: Options, s1: SetSpec, s2: SetSpec): void {
+        this.deleting = opts.delete_chars;
+        this.squeezing = opts.squeeze_repeats;
+        this.translating = opts.translating();
+        var identity: list[int] = [];
+        for (code in 0..256) {
+            identity.push(code);
+        }
+        this.low_map = identity;
+        if (this.deleting) {
+            this.delete_set = charset_of(s1.elems, opts.complement);
+            if (this.squeezing) {
+                this.squeeze_set = charset_of(s2.elems, false);
+            }
+        } else if (!opts.has_set2) {
+            this.squeeze_set = charset_of(s1.elems, opts.complement);
+        } else {
+            if (opts.complement) {
+                this.complement_sets(s1.elems, s2.elems, s2.length);
+            } else {
+                this.pair_sets(s1.elems, s2.elems);
+            }
+            if (this.squeezing) {
+                this.squeeze_set = charset_of(s2.elems, false);
+            }
+        }
+    }
+}
+
+# GNU's validate_case_classes: when SET2 has [:lower:] or [:upper:], each
+# must line up with [:lower:] or [:upper:] in SET1; the lengths then count
+# each such pair as one character. Returns an error message or "".
+func check_case_classes(edits s1: SetSpec, edits s2: SetSpec): string {
+    let cur1 = SetCursor(s1.elems);
+    let cur2 = SetCursor(s2.elems);
+    var c1 = 0;
+    var c2 = 0;
+    var fresh1 = true;
+    var fresh2 = true;
+    while (c1 != -1 and c2 != -1) {
+        safe {
+            c1 = cur1.next();
+            c2 = cur2.next();
+        }
+        let k1 = cur1.kind;
+        let k2 = cur2.kind;
+        if (fresh2 and k2 != CASE_NONE and !(fresh1 and k1 != CASE_NONE)) {
+            return "misaligned [:upper:] and/or [:lower:] construct";
+        }
+        if (k2 != CASE_NONE) {
+            safe {
+                cur1.skip_element();
+                cur2.skip_element();
+                s1.length -= 25;
+                s2.length -= 25;
+            }
+        }
+        fresh1 = cur1.fresh;
+        fresh2 = cur2.fresh;
+    }
+    return "";
+}
+
+# The character GNU's string2_extend repeats to stretch SET2 to the length
+# of SET1: the last character of SET2's last element, or -1 when that
+# element is a class.
+func extension_char(s2: SetSpec): int {
+    let last = s2.elems[s2.elems.len() - 1];
+    match last {
+        Elem.Single(c) => {
+            return c;
+        },
+        Elem.Span(first, last_char) => {
+            return last_char;
+        },
+        Elem.CharClass(cls) => {
+            return -1;
+        },
+        Elem.Equiv(c) => {
+            return c;
+        },
+        Elem.Repeat(c, count) => {
+            return c;
+        },
+    }
+    return -1;
+}
+
+# GNU's validate(). Returns an error message or "".
+func validate(opts: Options, edits s1: SetSpec, edits s2: SetSpec): string {
+    var problem = "";
+    safe {
+        problem = s1.compute_stats();
+    }
+    if (problem.len() > 0) {
+        return problem;
+    }
+    if (opts.complement) {
+        safe {
+            s1.length = DOMAIN_SIZE - charset_of(s1.elems, false).size();
+        }
+    }
+    if (s1.indefinite_repeats > 0) {
+        return "the [c*] repeat construct may not appear in string1";
+    }
+    if (!opts.has_set2) {
+        return "";
+    }
+
+    safe {
+        problem = s2.compute_stats();
+    }
+    if (problem.len() > 0) {
+        return problem;
+    }
+    if (s1.length >= s2.length and s2.indefinite_repeats == 1) {
+        safe {
+            s2.size_repeat(s2.indefinite_at, s1.length - s2.length);
+            s2.length = s1.length;
+        }
+    }
+    if (s2.indefinite_repeats > 1) {
+        return "only one [c*] repeat construct may appear in string2";
+    }
+
+    if (!opts.translating()) {
+        if (s2.indefinite_repeats > 0) {
+            return "the [c*] construct may appear in string2 only when translating";
+        }
+        return "";
+    }
+
+    if (s2.has_equiv_class) {
+        return "[=c=] expressions may not appear in string2 when translating";
+    }
+    if (s2.has_restricted_class) {
+        return "when translating, the only character classes that may appear in\nstring2 are 'upper' and 'lower'";
+    }
+    if (!opts.complement and s2.has_char_class) {
+        problem = check_case_classes(edits: s1, edits: s2);
+        if (problem.len() > 0) {
+            return problem;
+        }
+    }
+    if (s1.length > s2.length and !opts.truncate_set1) {
+        if (s2.length == 0) {
+            return "when not truncating set1, string2 must be non-empty";
+        }
+        let ch = extension_char(s2);
+        if (ch < 0) {
+            return "when translating with string1 longer than string2,\nthe latter string must not end with a character class";
+        }
+        safe {
+            s2.add(Elem.Repeat(ch, s1.length - s2.length));
+            s2.length = s1.length;
+        }
+    }
+    if (opts.complement and s1.has_char_class and !(s2.length == s1.length and homogeneous(s2.elems))) {
+        return "when translating with complemented character classes,\nstring2 must map all characters in the domain to one";
+    }
+    return "";
+}
+
+# Parses and checks the SETs of `opts` and builds the Plan. GNU's warnings
+# are appended to `warnings`, also when an error follows them.
+pub func make_plan(opts: Options, edits warnings: list[string]): Result[Plan, string] {
+    var s1 = SetSpec();
+    match parse_set(opts.set1, edits: warnings) {
+        Ok(spec) => {
+            s1 = spec;
+        },
+        Err(msg) => {
+            return Err(msg);
+        },
+    }
+    var s2 = SetSpec();
+    if (opts.has_set2) {
+        match parse_set(opts.set2, edits: warnings) {
+            Ok(spec) => {
+                s2 = spec;
+            },
+            Err(msg) => {
+                return Err(msg);
+            },
+        }
+    }
+    let problem = validate(opts, edits: s1, edits: s2);
+    if (problem.len() > 0) {
+        return Err(problem);
+    }
+    let plan = Plan();
+    safe {
+        plan.setup(opts, s1, s2);
+    }
+    return Ok(plan);
+}

@@ -1,0 +1,48 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.escapes import (Unquoted, unquote);
+
+func chars(text: string): list[int] {
+    var warnings: list[string] = [];
+    return unquote(text, edits: warnings).chars;
+}
+
+func same(a: list[int], b: list[int]): bool {
+    if (a.len() != b.len()) {
+        return false;
+    }
+    for (k in 0..a.len()) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func test_letters(): void {
+    expect(same(chars("\\a\\b\\f\\n\\r\\t\\v\\\\"), [7, 8, 12, 10, 13, 9, 11, 92]), "C escapes");
+}
+
+func test_octal(): void {
+    expect(same(chars("\\0\\12\\101\\1012"), [0, 10, 65, 65, 50]), "one to three digits");
+}
+
+func test_other_escapes_are_literal_and_marked(): void {
+    var warnings: list[string] = [];
+    let u = unquote("a\\-b", edits: warnings);
+    expect(same(u.chars, [97, 45, 98]), "dash");
+    expect(!u.escaped[0] and u.escaped[1] and !u.escaped[2], "only the dash is escaped");
+}
+
+func test_warnings(): void {
+    var warnings: list[string] = [];
+    let u = unquote("\\400", edits: warnings);
+    expect(same(u.chars, [32, 48]), "\\40 then 0");
+    expectEq(warnings.len(), 1, "one warning");
+    expectEq(warnings[0], "warning: the ambiguous octal escape \\400 is being\n\tinterpreted as the 2-byte sequence \\040, 0", "octal warning");
+    var w2: list[string] = [];
+    let v = unquote("a\\", edits: w2);
+    expect(same(v.chars, [97, 92]), "lone backslash kept");
+    expectEq(w2[0], "warning: an unescaped backslash at end of string is not portable", "backslash warning");
+}

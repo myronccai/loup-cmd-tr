@@ -1,0 +1,97 @@
+@mode(host.dual)
+
+# Text in messages, written the way GNU tr writes it.
+#
+# - quote() is gnulib's quote() in the C locale: the text in single quotes,
+#   with a backslash before `\` and `'` and C escapes for control
+#   characters.
+# - printable() and printable_char() are tr's own make_printable_str and
+#   make_printable_char: control characters as C escapes or `\NNN` octal.
+# Characters outside ASCII are written as they are, as in a UTF-8 locale.
+
+from commands.utf8 import (char_text, codes_of);
+
+func octal3(n: int): string {
+    let digits = "01234567";
+    let a = (n / 64) % 8;
+    let b = (n / 8) % 8;
+    let c = n % 8;
+    return digits.slice(a, a + 1) + digits.slice(b, b + 1) + digits.slice(c, c + 1);
+}
+
+func is_control(code: int): bool {
+    return (code >= 0 and code < 32) or code == 127;
+}
+
+# The C escape letter for a control character, or "" when it has none.
+func escape_letter(code: int): string {
+    if (code == 7) {
+        return "a";
+    }
+    if (code == 8) {
+        return "b";
+    }
+    if (code == 9) {
+        return "t";
+    }
+    if (code == 10) {
+        return "n";
+    }
+    if (code == 11) {
+        return "v";
+    }
+    if (code == 12) {
+        return "f";
+    }
+    if (code == 13) {
+        return "r";
+    }
+    return "";
+}
+
+# `\a`-style escape or `\NNN` for a control character.
+func control_text(code: int): string {
+    let letter = escape_letter(code);
+    if (letter.len() > 0) {
+        return "\\" + letter;
+    }
+    return "\\" + octal3(code);
+}
+
+pub func quote(text: string): string {
+    var out: list[string] = ["'"];
+    for (code in codes_of(text)) {
+        if (code == 92) {
+            out.push("\\\\");
+        } else if (code == 39) {
+            out.push("\\'");
+        } else if (is_control(code)) {
+            out.push(control_text(code));
+        } else {
+            out.push(char_text(code));
+        }
+    }
+    out.push("'");
+    return out.join("");
+}
+
+# One character for a message: itself, or `\NNN` for a control character.
+pub func printable_char(code: int): string {
+    if (is_control(code)) {
+        return "\\" + octal3(code);
+    }
+    return char_text(code);
+}
+
+# Characters for a message: control characters become C escapes or `\NNN`.
+pub func printable(codes: list[int]): string {
+    var out: list[string] = [];
+    for (code in codes) {
+        if (is_control(code)) {
+            out.push(control_text(code));
+        } else {
+            out.push(char_text(code));
+        }
+    }
+    return out.join("");
+}

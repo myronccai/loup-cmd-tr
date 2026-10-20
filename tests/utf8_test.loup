@@ -1,0 +1,63 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.utf8 import (RAW_BASE, codes_of, text_of, decode_into, encode_into);
+
+func decode(values: list[int]): list[int] {
+    var units: list[int] = [];
+    decode_into(bytesFromInts(values), 0, values.len(), edits: units);
+    return units;
+}
+
+func encode(codes: list[int]): list[int] {
+    var out: list[int] = [];
+    for (c in codes) {
+        encode_into(c, edits: out);
+    }
+    return out;
+}
+
+func same(a: list[int], b: list[int]): bool {
+    if (a.len() != b.len()) {
+        return false;
+    }
+    for (k in 0..a.len()) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func test_codes_and_text(): void {
+    let codes = codes_of("aé😀");
+    expect(same(codes, [97, 233, 128512]), "code points");
+    expectEq(text_of(codes), "aé😀", "back to text");
+}
+
+func test_decode_valid(): void {
+    expect(same(decode([97, 195, 169, 226, 130, 172, 240, 159, 152, 128]), [97, 233, 8364, 128512]), "1 to 4 bytes");
+}
+
+func test_decode_invalid_bytes_are_raw(): void {
+    expect(same(decode([97, 255, 98]), [97, RAW_BASE + 255, 98]), "stray byte");
+    expect(same(decode([226, 130]), [RAW_BASE + 226, RAW_BASE + 130]), "truncated");
+    expect(same(decode([192, 128]), [RAW_BASE + 192, RAW_BASE + 128]), "overlong");
+    expect(same(decode([237, 160, 128]), [RAW_BASE + 237, RAW_BASE + 160, RAW_BASE + 128]), "surrogate");
+}
+
+func test_decode_stops_after_limit(): void {
+    var units: list[int] = [];
+    let data = bytesFromInts([97, 195, 169, 98]);
+    let next = decode_into(data, 0, 2, edits: units);
+    expectEq(next, 3, "finishes the character that starts before the limit");
+    expectEq(units.len(), 2, "two characters");
+}
+
+func test_encode(): void {
+    expect(same(encode([97, 233, 8364, 128512]), [97, 195, 169, 226, 130, 172, 240, 159, 152, 128]), "UTF-8");
+    var out: list[int] = [];
+    expect(!encode_into(RAW_BASE + 255, edits: out), "raw byte is not UTF-8");
+    expectEq(out[0], 255, "written as itself");
+    expect(encode_into(0, edits: out), "NUL is fine");
+}

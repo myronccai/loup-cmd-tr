@@ -1,7 +1,8 @@
 # AGENTS.md
 
-This repository is a GitHub template for building a command-line application
-in the Loup programming language. The program is built as a native executable.
+This repository recreates GNU `tr` in the Loup programming language, as part
+of the loup-cmd series of example applications. The program is `host.dual`
+Loup built as a native executable. It works on Unicode characters, not bytes.
 
 ## Skills
 
@@ -20,23 +21,27 @@ mistakes. Load those only as needed.
 ```text
 .
 ├── package.lppkg                # Loup manifest: name, version, toolchain, [build] entry, [test] pattern
-├── Makefile                     # run, check, test, build, ci, clean
+├── Makefile                     # run, check, test, build, e2e, ci, clean
 ├── source/                      # all Loup code; modules import each other by path from here
 │   ├── main.loup                # entry point: func main() calls run(runtime.args())
 │   ├── appinfo.loup             # APP_NAME, APP_VERSION, APP_SUMMARY, exit statuses
 │   ├── cli/
-│   │   ├── args.loup            # struct Options, parse_args()
+│   │   ├── getopt.loup          # scan_options(): GNU getopt_long rules and messages, "+" mode
+│   │   ├── args.loup            # class Options, parse_args(): tr's options and operand counts
+│   │   ├── quote.loup           # quote(), printable(): GNU-style text in messages
 │   │   ├── usage.loup           # usage(), version_line()
-│   │   └── app.loup             # run(), dispatch(): routes commands, maps errors to exit statuses
-│   └── commands/                # one module per command
-│       └── hello.loup           # sample command: run_hello()
-├── tests/                       # tests: <module>_test.loup files with func test_*(): void
-│   ├── app_test.loup
-│   ├── args_test.loup
-│   └── hello_test.loup
-├── specs/                       # feature specs: <feature>/requirements.md, design.md, tasks.md
-│   ├── README.md
-│   └── command-line-interface/
+│   │   └── app.loup             # run(): parse, --help/--version, make_plan, run_tr, exit status
+│   └── commands/
+│       ├── utf8.loup            # decode_into(), encode_into(): code points and raw bytes
+│       ├── escapes.loup         # class Unquoted, unquote(): backslash escapes with escaped flags
+│       ├── sets.loup            # enum Elem, class SetSpec, parse_set(), class SetCursor, classes
+│       ├── charset.loup         # class CharSet: sorted ranges, contains(), count_below()
+│       ├── plan.loup            # class Plan, make_plan(): GNU's validation, tables
+│       └── tr.loup              # filter_units(), tr_text(), run_tr()
+├── tests/
+│   ├── *_test.loup              # unit tests: func test_*(): void
+│   └── e2e.sh                   # end-to-end tests of the native binary
+├── specs/tr/                    # requirements.md, design.md, tasks.md
 ├── skills/loup-programmer/      # the Loup skill and its references
 ├── .github/workflows/ci.yml     # installs Loup and runs `make ci`
 └── build/                       # build output (git-ignored)
@@ -49,14 +54,15 @@ and `clang` 17 or later for native builds.
 
 | Task | Command | Notes |
 |------|---------|-------|
-| Run from source | `make run ARGS="hello Ann --shout"` | `loup run source/main.loup -- ARGS` |
+| Run from source | `echo hello \| make run ARGS="a-z A-Z"` | `loup run source/main.loup -- ARGS`; output with bytes that are not UTF-8 needs the native build |
 | Type-check | `make check` | checks `source/main.loup` and every module it imports; tests are not checked |
-| Run all tests | `make test` | every `tests/*_test.loup` |
-| Run matching tests | `make test TEST_ARGS="--filter value"` | tests whose name contains `value` |
-| Run one test file | `make test TEST_ARGS="--file tests/args_test.loup"` | |
-| Build | `make build` | native binary at `build/myapp` |
-| Run the binary | `build/myapp --help` | |
-| Everything CI runs | `make ci` | check, test, build, then `build/myapp --version` |
+| Run all tests | `make test` | every `tests/*_test.loup`, one at a time |
+| Run matching tests | `make test TEST_ARGS="--filter case"` | tests whose name contains `case` |
+| Run one test file | `make test TEST_ARGS="--file tests/sets_test.loup"` | |
+| Build | `make build` | native binary at `build/tr` |
+| Run the binary | `build/tr --help` | |
+| End-to-end tests | `make e2e` | runs `tests/e2e.sh build/tr`: output compared byte for byte |
+| Everything CI runs | `make ci` | check, test, build, e2e, then `build/tr --version` |
 | Clean | `make clean` | removes `build/` and `.temp/` |
 
 Run `make ci` before reporting a change as done. `loup run` and the native
@@ -70,21 +76,15 @@ both, and sets `LOUPPATH=source` for tests.
 
 ## Making a change
 
-1. Write or update the spec in `specs/<feature>/` (see [specs/README.md](specs/README.md)).
+1. Update the spec in `specs/tr/` (see [specs/README.md](specs/README.md)).
 2. Change the code under `source/`.
-3. Add or update tests in `tests/`.
+3. Add or update unit tests in `tests/` and cases in `tests/e2e.sh`.
 4. Run `make ci`.
-5. Tick the finished tasks in `specs/<feature>/tasks.md`.
+5. Tick the finished tasks in `specs/tr/tasks.md`.
 
-To add a command:
-
-1. Create `source/commands/<name>.loup` with `@mode(host.dual)` and
-   `pub func run_<name>(opts: Options): int`, returning an exit status from
-   `appinfo`.
-2. Add an arm for it to `dispatch` in `source/cli/app.loup`.
-3. Describe it in `usage()` in `source/cli/usage.loup`.
-4. Add any new options to `Options` and `parse_args` in `source/cli/args.loup`.
-5. Add `tests/<name>_test.loup`.
+Keep behaviour in pure functions that return values (`tr_text` and
+`filter_units` return the output, `make_plan` returns the plan or the
+message) so unit tests can check it; only `run_tr` reads and prints.
 
 ## Conventions
 
@@ -94,10 +94,21 @@ To add a command:
   `from cli.args import (Options);`. Tests import them the same way. Do not
   use relative imports (`from .args import ...`): the self-hosted `loup run`
   on Linux x86-64 fails on them.
-- Struct fields read from another module must be `pub`.
+- Records shared between modules are classes (`Options`, `SetSpec`, `Plan`),
+  and the few structs (in `getopt.loup`) have field names used nowhere else:
+  the native build lays out struct fields by name across the whole program.
+- Write `match` on enums with payloads in statement form, with a `return`
+  or an assignment in each arm.
 - The native build supports less than `loup run` does. For example,
-  `list.is_empty()` fails native codegen (`E-CODEGEN-UNHANDLED-METHOD`); use
-  `len() == 0`.
+  `list.is_empty()`, `list.map()` and `list.clear()` fail native codegen
+  (`E-CODEGEN-UNHANDLED-METHOD`); use `len() == 0`, a loop, and `pop()`.
+- The native runtime never frees lists or strings it allocates in a loop:
+  `run_tr` reuses its chunk buffers instead of making new ones.
+- Characters are `int` code points; bytes that are not UTF-8 are the codes
+  `RAW_BASE + byte`. Classes are ASCII only.
+- GNU tr is installed here as `gnutr` (plain `tr` may be uutils); compare
+  behaviour with it (`LC_ALL=C gnutr ...`), but write expected output into
+  `tests/e2e.sh`.
 - Keep `APP_VERSION` in `source/appinfo.loup` equal to `version` in
   `package.lppkg`.
 - The skill's examples use the `loup init` layout (`src/`, `tests/`, and

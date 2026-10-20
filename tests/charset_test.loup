@@ -1,0 +1,38 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.charset import (CharSet, charset_of);
+from commands.sets import (SetSpec, parse_set);
+from commands.utf8 import (RAW_BASE);
+
+func set_of(text: string, invert: bool): CharSet {
+    var warnings: list[string] = [];
+    let s = parse_set(text, edits: warnings).unwrap();
+    return charset_of(s.elems, invert);
+}
+
+func test_members(): void {
+    let s = set_of("c-ea[:digit:]é", false);
+    expect(s.contains(97) and s.contains(100) and s.contains(53) and s.contains(233), "members");
+    expect(!s.contains(98) and !s.contains(102) and !s.contains(RAW_BASE + 255), "non-members");
+    expectEq(s.size(), 15, "a, c-e, 10 digits, é");
+}
+
+func test_complement(): void {
+    let s = set_of("a-z", true);
+    expect(!s.contains(109), "letters are out");
+    expect(s.contains(65) and s.contains(8364) and s.contains(RAW_BASE + 255), "everything else is in");
+}
+
+func test_count_below(): void {
+    let s = set_of("b-dx", false);
+    expectEq(s.count_below(97), 0, "below b");
+    expectEq(s.count_below(99), 1, "inside the range");
+    expectEq(s.count_below(120), 3, "before x");
+    expectEq(s.count_below(1000), 4, "all");
+}
+
+func test_overlaps_merge(): void {
+    let s = set_of("a-mf-zab", false);
+    expectEq(s.size(), 26, "merged");
+}

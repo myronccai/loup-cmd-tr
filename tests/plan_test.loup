@@ -1,0 +1,45 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from cli.args import (parse_args);
+from commands.plan import (Plan, make_plan);
+from commands.tr import (tr_text);
+
+func plan_for(argv: list[string]): Plan {
+    var warnings: list[string] = [];
+    return make_plan(parse_args(argv).unwrap(), edits: warnings).unwrap();
+}
+
+func error_of(argv: list[string]): string {
+    var warnings: list[string] = [];
+    return make_plan(parse_args(argv).unwrap(), edits: warnings).unwrap_err();
+}
+
+func test_validation_messages(): void {
+    expectEq(error_of(["[a*]", "x"]), "the [c*] repeat construct may not appear in string1", "[c*] in SET1");
+    expectEq(error_of(["a", "[a*][b*]"]), "only one [c*] repeat construct may appear in string2", "two [c*]");
+    expectEq(error_of(["-ds", "a", "[b*]"]), "the [c*] construct may appear in string2 only when translating", "[c*] without translating");
+    expectEq(error_of(["a", "[=a=]"]), "[=c=] expressions may not appear in string2 when translating", "equivalence in SET2");
+    expectEq(error_of(["a", "[:alpha:]"]), "when translating, the only character classes that may appear in\nstring2 are 'upper' and 'lower'", "restricted class");
+    expectEq(error_of(["a-z", "[:upper:]"]), "misaligned [:upper:] and/or [:lower:] construct", "misaligned");
+    expectEq(error_of(["a", ""]), "when not truncating set1, string2 must be non-empty", "empty SET2");
+    expectEq(error_of(["[:upper:]a", "[:lower:]"]), "when translating with string1 longer than string2,\nthe latter string must not end with a character class", "class at the end");
+    expectEq(error_of(["-c", "[:alpha:]", "xy"]), "when translating with complemented character classes,\nstring2 must map all characters in the domain to one", "complemented class");
+}
+
+func test_parse_errors_come_first(): void {
+    expectEq(error_of(["[:nope:]", "[a*][b*]"]), "invalid character class 'nope'", "SET1 parse error");
+}
+
+func test_warnings_are_collected(): void {
+    var warnings: list[string] = [];
+    let made = make_plan(parse_args(["\\400", "x\\"]).unwrap(), edits: warnings);
+    expect(made.is_ok(), "warnings are not errors");
+    expectEq(warnings.len(), 2, "two warnings");
+}
+
+func test_accepted(): void {
+    expectEq(tr_text("abc", plan_for(["-t", "abc", ""])), "abc", "-t with an empty SET2");
+    expectEq(tr_text("Hello", plan_for(["-c", "[:alpha:]", "[x*]"])), "Hello", "complemented class to one character");
+    expectEq(tr_text("a1", plan_for(["-c", "[:alpha:]", "x"])), "ax", "SET2 extended");
+}

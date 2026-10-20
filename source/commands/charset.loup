@@ -1,0 +1,149 @@
+@mode(host.dual)
+
+# The characters of a SET as a set, for membership tests: its members as
+# sorted, disjoint ranges, optionally complemented. Codes 0..255 are also
+# kept in a table, since most input is ASCII.
+
+from commands.sets import (Elem, class_members);
+
+pub class CharSet {
+    # first0, last0, first1, last1, ...: sorted, disjoint, not adjacent.
+    var bounds: list[int] = [];
+    pub var complemented: bool = false;
+    # Membership of the codes 0..255, with the complement applied.
+    var low: list[bool] = [];
+
+    # Fills the set with the members of `elems` (GNU's set_initialize).
+    pub modifier func build(elems: list[Elem], invert: bool): void {
+        var firsts: list[int] = [];
+        var lasts: list[int] = [];
+        for (e in elems) {
+            match e {
+                Elem.Single(c) => {
+                    firsts.push(c);
+                    lasts.push(c);
+                },
+                Elem.Span(first, last) => {
+                    firsts.push(first);
+                    lasts.push(last);
+                },
+                Elem.CharClass(cls) => {
+                    for (c in class_members(cls)) {
+                        firsts.push(c);
+                        lasts.push(c);
+                    }
+                },
+                Elem.Equiv(c) => {
+                    firsts.push(c);
+                    lasts.push(c);
+                },
+                Elem.Repeat(c, count) => {
+                    if (count > 0) {
+                        firsts.push(c);
+                        lasts.push(c);
+                    }
+                },
+            }
+        }
+        # Insertion sort by first character (sets are small).
+        var k = 1;
+        while (k < firsts.len()) {
+            let f = firsts[k];
+            let l = lasts[k];
+            var j = k - 1;
+            while (j >= 0 and firsts[j] > f) {
+                firsts[j + 1] = firsts[j];
+                lasts[j + 1] = lasts[j];
+                j -= 1;
+            }
+            firsts[j + 1] = f;
+            lasts[j + 1] = l;
+            k += 1;
+        }
+        var merged: list[int] = [];
+        k = 0;
+        while (k < firsts.len()) {
+            let m = merged.len();
+            if (m > 0 and firsts[k] <= merged[m - 1] + 1) {
+                if (lasts[k] > merged[m - 1]) {
+                    merged[m - 1] = lasts[k];
+                }
+            } else {
+                merged.push(firsts[k]);
+                merged.push(lasts[k]);
+            }
+            k += 1;
+        }
+        this.bounds = merged;
+        this.complemented = invert;
+        var table: list[bool] = [];
+        for (code in 0..256) {
+            table.push(this.in_bounds(code) != invert);
+        }
+        this.low = table;
+    }
+
+    # Whether `code` is in the uncomplemented set.
+    func in_bounds(code: int): bool {
+        var lo = 0;
+        var hi = this.bounds.len() / 2;
+        while (lo < hi) {
+            let mid = (lo + hi) / 2;
+            if (code < this.bounds[2 * mid]) {
+                hi = mid;
+            } else if (code > this.bounds[2 * mid + 1]) {
+                lo = mid + 1;
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub func contains(code: int): bool {
+        if (code >= 0 and code < 256) {
+            return this.low[code];
+        }
+        return this.in_bounds(code) != this.complemented;
+    }
+
+    # How many members of the uncomplemented set are below `code`.
+    pub func count_below(code: int): int {
+        var count = 0;
+        var k = 0;
+        while (k < this.bounds.len()) {
+            let first = this.bounds[k];
+            let last = this.bounds[k + 1];
+            if (first >= code) {
+                return count;
+            }
+            if (last < code) {
+                count += last - first + 1;
+            } else {
+                count += code - first;
+            }
+            k += 2;
+        }
+        return count;
+    }
+
+    # How many distinct members the uncomplemented set has.
+    pub func size(): int {
+        var count = 0;
+        var k = 0;
+        while (k < this.bounds.len()) {
+            count += this.bounds[k + 1] - this.bounds[k] + 1;
+            k += 2;
+        }
+        return count;
+    }
+}
+
+# A CharSet of the members of `elems`, complemented if asked.
+pub func charset_of(elems: list[Elem], invert: bool): CharSet {
+    let s = CharSet();
+    safe {
+        s.build(elems, invert);
+    }
+    return s;
+}

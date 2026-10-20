@@ -1,0 +1,530 @@
+@mode(host.dual)
+
+# SET operands parsed into elements, as GNU tr's build_spec_list does:
+# `[:class:]`, `[=c=]`, `[c*n]` and `[c*]`, ranges `a-z`, and single
+# characters. A SET is never expanded into a list of characters, because
+# `[c*]` and the complement of a SET can stand for a million of them;
+# SetCursor walks it one character at a time and spec_nth() finds the
+# character at a position.
+
+from cli.quote import (quote, printable, printable_char);
+from commands.escapes import (Unquoted, unquote);
+from commands.utf8 import (char_text);
+
+pub enum Elem {
+    # One character.
+    Single(int),
+    # CHAR1-CHAR2: first and last character.
+    Span(int, int),
+    # [:name:], by class number (see CLASS_* below).
+    CharClass(int),
+    # [=c=]: every character equivalent to c, which is c alone.
+    Equiv(int),
+    # [c*n]: the character and n; n is 0 for [c*] until plan.loup sizes it.
+    Repeat(int, int),
+}
+
+# The character classes, numbered in the order of class_names().
+pub const CLASS_LOWER: int = 6;
+pub const CLASS_UPPER: int = 10;
+
+# Which case class an element is, for [:lower:]/[:upper:] case conversion.
+pub const CASE_NONE: int = 0;
+pub const CASE_LOWER: int = 1;
+pub const CASE_UPPER: int = 2;
+
+# The largest count a SET may reach: Loup's largest int. GNU's limit is
+# 2^64 - 2.
+pub const MAX_COUNT: int = 9223372036854775807;
+
+const BACKSLASH: int = 92;
+const LBRACKET: int = 91;
+const RBRACKET: int = 93;
+const COLON: int = 58;
+const EQUALS: int = 61;
+const STAR: int = 42;
+const DASH: int = 45;
+
+pub func class_names(): list[string] {
+    return ["alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"];
+}
+
+# Whether `code` is in class `cls`. Classes hold ASCII characters only, as
+# in GNU tr, whose classes are byte classes.
+pub func class_member(cls: int, code: int): bool {
+    if (code < 0 or code > 127) {
+        return false;
+    }
+    let digit = code >= 48 and code <= 57;
+    let upper = code >= 65 and code <= 90;
+    let lower = code >= 97 and code <= 122;
+    if (cls == 0) {
+        return digit or upper or lower;
+    }
+    if (cls == 1) {
+        return upper or lower;
+    }
+    if (cls == 2) {
+        return code == 32 or code == 9;
+    }
+    if (cls == 3) {
+        return code < 32 or code == 127;
+    }
+    if (cls == 4) {
+        return digit;
+    }
+    if (cls == 5) {
+        return code > 32 and code < 127;
+    }
+    if (cls == 6) {
+        return lower;
+    }
+    if (cls == 7) {
+        return code >= 32 and code < 127;
+    }
+    if (cls == 8) {
+        return code > 32 and code < 127 and !(digit or upper or lower);
+    }
+    if (cls == 9) {
+        return code == 32 or (code >= 9 and code <= 13);
+    }
+    if (cls == 10) {
+        return upper;
+    }
+    if (cls == 11) {
+        return digit or (code >= 65 and code <= 70) or (code >= 97 and code <= 102);
+    }
+    return false;
+}
+
+# The members of class `cls`, in ascending order.
+pub func class_members(cls: int): list[int] {
+    var out: list[int] = [];
+    for (code in 0..128) {
+        if (class_member(cls, code)) {
+            out.push(code);
+        }
+    }
+    return out;
+}
+
+# The class number for a name such as "alpha", or -1.
+func class_number(name: list[int]): int {
+    var parts: list[string] = [];
+    for (code in name) {
+        parts.push(char_text(code));
+    }
+    let text = parts.join("");
+    let names = class_names();
+    var k = 0;
+    while (k < names.len()) {
+        if (names[k] == text) {
+            return k;
+        }
+        k += 1;
+    }
+    return -1;
+}
+
+# How many characters an element stands for.
+pub func elem_length(e: Elem): int {
+    match e {
+        Elem.Single(c) => {
+            return 1;
+        },
+        Elem.Span(first, last) => {
+            return last - first + 1;
+        },
+        Elem.CharClass(cls) => {
+            return class_members(cls).len();
+        },
+        Elem.Equiv(c) => {
+            return 1;
+        },
+        Elem.Repeat(c, count) => {
+            return count;
+        },
+    }
+    return 0;
+}
+
+# The character at `offset` (0-based) within an element.
+pub func elem_member(e: Elem, offset: int): int {
+    match e {
+        Elem.Single(c) => {
+            return c;
+        },
+        Elem.Span(first, last) => {
+            return first + offset;
+        },
+        Elem.CharClass(cls) => {
+            return class_members(cls)[offset];
+        },
+        Elem.Equiv(c) => {
+            return c;
+        },
+        Elem.Repeat(c, count) => {
+            return c;
+        },
+    }
+    return -1;
+}
+
+# CASE_LOWER or CASE_UPPER for [:lower:] and [:upper:], else CASE_NONE.
+pub func elem_case(e: Elem): int {
+    match e {
+        Elem.CharClass(cls) => {
+            if (cls == CLASS_LOWER) {
+                return CASE_LOWER;
+            }
+            if (cls == CLASS_UPPER) {
+                return CASE_UPPER;
+            }
+            return CASE_NONE;
+        },
+        _ => {
+            return CASE_NONE;
+        },
+    }
+    return CASE_NONE;
+}
+
+# A parsed SET and the figures GNU tr validates it with.
+pub class SetSpec {
+    pub var elems: list[Elem] = [];
+    # How many characters the SET stands for (GNU's s->length).
+    pub var length: int = 0;
+    pub var has_char_class: bool = false;
+    # A class other than [:lower:] and [:upper:].
+    pub var has_restricted_class: bool = false;
+    pub var has_equiv_class: bool = false;
+    # How many [c*] elements, and the index of the last one.
+    pub var indefinite_repeats: int = 0;
+    pub var indefinite_at: int = -1;
+
+    pub modifier func add(e: Elem): void {
+        this.elems.push(e);
+    }
+
+    # Computes the figures above (GNU's get_spec_stats). Returns an error
+    # message, or "" when the length fits.
+    pub modifier func compute_stats(): string {
+        this.length = 0;
+        this.has_char_class = false;
+        this.has_restricted_class = false;
+        this.has_equiv_class = false;
+        this.indefinite_repeats = 0;
+        this.indefinite_at = -1;
+        var k = 0;
+        while (k < this.elems.len()) {
+            let e = this.elems[k];
+            let size = elem_length(e);
+            match e {
+                Elem.CharClass(cls) => {
+                    this.has_char_class = true;
+                    if (cls != CLASS_LOWER and cls != CLASS_UPPER) {
+                        this.has_restricted_class = true;
+                    }
+                },
+                Elem.Equiv(c) => {
+                    this.has_equiv_class = true;
+                },
+                Elem.Repeat(c, count) => {
+                    if (count == 0) {
+                        this.indefinite_repeats += 1;
+                        this.indefinite_at = k;
+                    }
+                },
+                _ => {},
+            }
+            if (size > MAX_COUNT - this.length) {
+                return "too many characters in set";
+            }
+            this.length += size;
+            k += 1;
+        }
+        return "";
+    }
+
+    # Gives the [c*] element at `at` its count.
+    pub modifier func size_repeat(at: int, count: int): void {
+        match this.elems[at] {
+            Elem.Repeat(c, old) => {
+                this.elems[at] = Elem.Repeat(c, count);
+            },
+            _ => {},
+        }
+    }
+}
+
+# The character at position `k` of a SET, or -1 past its end.
+pub func spec_nth(elems: list[Elem], k: int): int {
+    var rest = k;
+    for (e in elems) {
+        let size = elem_length(e);
+        if (rest < size) {
+            return elem_member(e, rest);
+        }
+        rest -= size;
+    }
+    return -1;
+}
+
+# Whether a SET has characters and they are all the same one.
+pub func homogeneous(elems: list[Elem]): bool {
+    var first = -1;
+    for (e in elems) {
+        let size = elem_length(e);
+        if (size > 0) {
+            let a = elem_member(e, 0);
+            let z = elem_member(e, size - 1);
+            if (first < 0) {
+                first = a;
+            }
+            if (a != first or z != first) {
+                return false;
+            }
+            match e {
+                Elem.CharClass(cls) => {
+                    return false;
+                },
+                _ => {},
+            }
+        }
+    }
+    return first >= 0;
+}
+
+# Walks a SET one character at a time, like GNU's get_next(). After each
+# call, `kind` is the case class of the element the character came from
+# and `fresh` tells whether the next character starts a new element.
+pub class SetCursor {
+    var elems: list[Elem] = [];
+    var index: int = 0;
+    var offset: int = 0;
+    pub var kind: int = CASE_NONE;
+    pub var fresh: bool = true;
+
+    pub func constructor(elems: list[Elem]) {
+        this.elems = elems;
+    }
+
+    # The next character, or -1 at the end.
+    pub modifier func next(): int {
+        this.kind = CASE_NONE;
+        while (this.index < this.elems.len() and elem_length(this.elems[this.index]) == 0) {
+            this.index += 1;
+            this.offset = 0;
+        }
+        if (this.index >= this.elems.len()) {
+            this.fresh = true;
+            return -1;
+        }
+        let e = this.elems[this.index];
+        this.kind = elem_case(e);
+        let code = elem_member(e, this.offset);
+        this.offset += 1;
+        if (this.offset >= elem_length(e)) {
+            this.index += 1;
+            this.offset = 0;
+        }
+        this.fresh = this.offset == 0;
+        return code;
+    }
+
+    # Skips the rest of the current element (GNU's skip_construct).
+    pub modifier func skip_element(): void {
+        if (this.offset > 0) {
+            this.index += 1;
+            this.offset = 0;
+        } else if (this.index < this.elems.len()) {
+            # next() moved past a finished element already; GNU's cursor
+            # sits on the element after it, and skips that one.
+            this.index += 1;
+        }
+        this.fresh = true;
+    }
+}
+
+func is_plain(c: list[int], esc: list[bool], i: int, code: int): bool {
+    return i < c.len() and c[i] == code and !esc[i];
+}
+
+# The index of `delim` in an unescaped `delim]` at or after `start`, or -1.
+func find_closing_delim(c: list[int], esc: list[bool], start: int, delim: int): int {
+    var k = start;
+    while (k + 1 < c.len()) {
+        if (c[k] == delim and c[k + 1] == RBRACKET and !esc[k] and !esc[k + 1]) {
+            return k;
+        }
+        k += 1;
+    }
+    return -1;
+}
+
+# Whether `*`, decimal digits and `]` start at `at` (GNU's
+# star_digits_closebracket).
+func star_digits_closebracket(c: list[int], esc: list[bool], at: int): bool {
+    if (!is_plain(c, esc, at, STAR)) {
+        return false;
+    }
+    var k = at + 1;
+    while (k < c.len()) {
+        if (c[k] < 48 or c[k] > 57 or esc[k]) {
+            return is_plain(c, esc, k, RBRACKET);
+        }
+        k += 1;
+    }
+    return false;
+}
+
+# For a `[` at `at - 1` and the character to repeat at `at`: the index of
+# the `]` closing `[c*...]`, or -1 when this is no such construct.
+func repeat_close(c: list[int], esc: list[bool], at: int): int {
+    if (!is_plain(c, esc, at + 1, STAR)) {
+        return -1;
+    }
+    var k = at + 2;
+    while (k < c.len() and !esc[k]) {
+        if (c[k] == RBRACKET) {
+            return k;
+        }
+        k += 1;
+    }
+    return -1;
+}
+
+func is_space(code: int): bool {
+    return code == 32 or (code >= 9 and code <= 13);
+}
+
+# The n of `[c*n]`: octal when it starts with 0, else decimal, with the
+# blanks and `+` sign strtoumax accepts. 0 (or no digits) means `[c*]`.
+func repeat_count(digits: list[int]): Result[int, string] {
+    let n = digits.len();
+    if (n == 0) {
+        return Ok(0);
+    }
+    let bad = "invalid repeat count " + quote(printable(digits)) + " in [c*n] construct";
+    let base = if (digits[0] == 48) { 8 } else { 10 };
+    var k = 0;
+    while (k < n and is_space(digits[k])) {
+        k += 1;
+    }
+    if (k < n and digits[k] == 43) {
+        k += 1;
+    }
+    var value = 0;
+    var seen = false;
+    while (k < n and digits[k] >= 48 and digits[k] < 48 + base) {
+        let d = digits[k] - 48;
+        if (value > (MAX_COUNT - d) / base) {
+            return Err(bad);
+        }
+        value = value * base + d;
+        seen = true;
+        k += 1;
+    }
+    if (!seen or k != n) {
+        return Err(bad);
+    }
+    return Ok(value);
+}
+
+# Parses one SET operand. GNU's warnings are appended to `warnings`; the
+# first error ends the parse.
+pub func parse_set(operand: string, edits warnings: list[string]): Result[SetSpec, string] {
+    let es = unquote(operand, edits: warnings);
+    let c = es.chars;
+    let esc = es.escaped;
+    let n = c.len();
+    let spec = SetSpec();
+    var i = 0;
+    while (i + 2 < n) {
+        if (is_plain(c, esc, i, LBRACKET)) {
+            if (is_plain(c, esc, i + 1, COLON) or is_plain(c, esc, i + 1, EQUALS)) {
+                let delim = c[i + 1];
+                let close = find_closing_delim(c, esc, i + 2, delim);
+                if (close >= 0) {
+                    var name: list[int] = [];
+                    for (k in (i + 2)..close) {
+                        name.push(c[k]);
+                    }
+                    if (name.len() == 0) {
+                        if (delim == COLON) {
+                            return Err("missing character class name '[::]'");
+                        }
+                        return Err("missing equivalence class character '[==]'");
+                    }
+                    if (delim == COLON) {
+                        let cls = class_number(name);
+                        if (cls >= 0) {
+                            safe {
+                                spec.add(Elem.CharClass(cls));
+                            }
+                            i = close + 2;
+                            continue;
+                        }
+                        if (!star_digits_closebracket(c, esc, i + 2)) {
+                            return Err("invalid character class " + quote(printable(name)));
+                        }
+                    } else {
+                        if (name.len() == 1) {
+                            safe {
+                                spec.add(Elem.Equiv(name[0]));
+                            }
+                            i = close + 2;
+                            continue;
+                        }
+                        if (!star_digits_closebracket(c, esc, i + 2)) {
+                            return Err(printable(name) + ": equivalence class operand must be a single character");
+                        }
+                    }
+                }
+            }
+            let close = repeat_close(c, esc, i + 1);
+            if (close >= 0) {
+                var digits: list[int] = [];
+                for (k in (i + 3)..close) {
+                    digits.push(c[k]);
+                }
+                var count = 0;
+                match repeat_count(digits) {
+                    Ok(v) => {
+                        count = v;
+                    },
+                    Err(msg) => {
+                        return Err(msg);
+                    },
+                }
+                safe {
+                    spec.add(Elem.Repeat(c[i + 1], count));
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        if (is_plain(c, esc, i + 1, DASH)) {
+            if (c[i + 2] < c[i]) {
+                return Err("range-endpoints of '" + printable_char(c[i]) + "-" + printable_char(c[i + 2])
+                    + "' are in reverse collating sequence order");
+            }
+            safe {
+                spec.add(Elem.Span(c[i], c[i + 2]));
+            }
+            i += 3;
+        } else {
+            safe {
+                spec.add(Elem.Single(c[i]));
+            }
+            i += 1;
+        }
+    }
+    while (i < n) {
+        safe {
+            spec.add(Elem.Single(c[i]));
+        }
+        i += 1;
+    }
+    return Ok(spec);
+}
