@@ -107,6 +107,8 @@ to write such bytes from a native build.
 - Classes hold ASCII characters only, as in GNU tr (its classes are byte
   classes).
 - A repeat count must fit in a signed 64-bit integer (GNU: up to 2^64 - 2).
+- Standard input is read whole; write errors on standard output are not
+  reported.
 - Messages use the C locale's quotes; non-ASCII characters in them are
   printed as they are.
 - `--version` prints a single line; `--help` omits GNU's links.

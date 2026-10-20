@@ -120,6 +120,8 @@ read error, as in GNU tr.
   allows up to 2^64 - 2).
 - Standard input is read whole before any output (Loup 1.26.0 has no
   streaming reader), so `tr` cannot work on an endless stream.
+- Write errors on standard output (a full disk, `> /dev/full`) are not
+  reported; GNU prints `tr: write error: ...` and exits with 1.
 - Messages use the C locale's quotes (`'x'`, not `‘x’`); non-ASCII
   characters in them are printed as they are rather than as octal escapes.
 - `--version` prints a single line; `--help` omits GNU's links to its
