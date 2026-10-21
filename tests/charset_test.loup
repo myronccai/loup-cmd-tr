@@ -8,14 +8,14 @@
 # LOUPPATH), one test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expect, expectEq);
-from commands.charset import (CharSet, charset_of);
+from commands.charset import (CharSet);
 from commands.sets import (SetSpec, parse_set);
 from commands.utf8 import (RAW_BASE);
 
 func set_of(text: string, invert: bool): CharSet {
     var warnings: list[string] = [];
     let s = parse_set(text, edits: warnings).unwrap();
-    return charset_of(s.elems, invert);
+    return CharSet.of(s.elems, invert);
 }
 
 func test_members(): void {
@@ -42,4 +42,14 @@ func test_count_below(): void {
 func test_overlaps_merge(): void {
     let s = set_of("a-mf-zab", false);
     expectEq(s.size(), 26, "merged");
+    let adjacent = set_of("a-cd-f", false);
+    expectEq(adjacent.size(), 6, "adjacent runs join");
+    expectEq(adjacent.count_below(100), 3, "one run: a-c below d");
+}
+
+func test_count_below_past_several_runs(): void {
+    let s = set_of("a-cx-z\u{e9}", false);
+    expectEq(s.count_below(0xE9), 6, "two whole runs");
+    expectEq(s.count_below(0xEA), 7, "and é");
+    expect(s.contains(0xE9) and !s.contains(0xEA), "é is a member, ê is not");
 }

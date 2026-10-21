@@ -106,7 +106,8 @@ pub func decode_into(data: bytes, start: int, limit: int, edits units: list[int]
             if (c < lo or c > hi) {
                 ok = false;
             } else {
-                code = code * 64 + (c - 128);
+                code <<= 6;
+                code |= c & 0x3F;
             }
             lo = 128;
             hi = 191;

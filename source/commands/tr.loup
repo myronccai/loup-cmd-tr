@@ -36,8 +36,11 @@ pub func filter_units(units: list[int], plan: Plan, last: int): list[int] {
     return out;
 }
 
-# As filter_units, appending to `out`.
-pub func filter_into(units: list[int], plan: Plan, last: int, edits out: list[int]): void {
+# As filter_units, appending to `out`. The signature states what run_tr's
+# chunk loop relies on: `units` is only read, `out` is written, and the
+# two are different lists (`distinct` is checked by no lane in 1.26.0, so
+# it documents rather than enforces).
+pub func filter_into(reads units: list[int], plan: Plan, last: int, out: list[int]) requires edits(out), distinct(out, units): void {
     var prev = last;
     for (u in units) {
         var c = u;

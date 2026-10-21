@@ -13,7 +13,7 @@
 # setup in that order.
 
 from cli.args import (Options);
-from commands.charset import (CharSet, charset_of);
+from commands.charset import (CharSet);
 from commands.sets import (Elem, SetSpec, SetCursor, parse_set, spec_nth, homogeneous, CASE_NONE, CASE_LOWER, CASE_UPPER);
 from commands.utf8 import (DOMAIN_SIZE);
 
@@ -111,7 +111,7 @@ pub class Plan {
     # The translation for -c: the codes 0..255 now, the others on demand.
     modifier func complement_sets(s1: list[Elem], s2: list[Elem], length2: int): void {
         this.by_complement = true;
-        this.s1_set = charset_of(s1, false);
+        this.s1_set = CharSet.of(s1, false);
         this.s2_elems = s2;
         this.s2_length = length2;
         for (code in 0..256) {
@@ -123,18 +123,17 @@ pub class Plan {
         this.deleting = opts.delete_chars;
         this.squeezing = opts.squeeze_repeats;
         this.translating = opts.translating();
-        var identity: list[int] = [];
-        for (code in 0..256) {
-            identity.push(code);
-        }
+        # Start from the identity on 0..255; the builders below overwrite
+        # the codes that change.
+        let identity: list[int] = [code for code in 0..256];
         this.low_map = identity;
         if (this.deleting) {
-            this.delete_set = charset_of(s1.elems, opts.complement);
+            this.delete_set = CharSet.of(s1.elems, opts.complement);
             if (this.squeezing) {
-                this.squeeze_set = charset_of(s2.elems, false);
+                this.squeeze_set = CharSet.of(s2.elems, false);
             }
         } else if (!opts.has_set2) {
-            this.squeeze_set = charset_of(s1.elems, opts.complement);
+            this.squeeze_set = CharSet.of(s1.elems, opts.complement);
         } else {
             if (opts.complement) {
                 this.complement_sets(s1.elems, s2.elems, s2.length);
@@ -142,7 +141,7 @@ pub class Plan {
                 this.pair_sets(s1.elems, s2.elems);
             }
             if (this.squeezing) {
-                this.squeeze_set = charset_of(s2.elems, false);
+                this.squeeze_set = CharSet.of(s2.elems, false);
             }
         }
     }
@@ -186,7 +185,7 @@ func check_case_classes(edits s1: SetSpec, edits s2: SetSpec): string {
 # of SET1: the last character of SET2's last element, or -1 when that
 # element is a class.
 func extension_char(s2: SetSpec): int {
-    let last = s2.elems[s2.elems.len() - 1];
+    let last = s2.elems[-1];
     match last {
         Elem.Single(c) => {
             return c;
@@ -218,7 +217,7 @@ func validate(opts: Options, edits s1: SetSpec, edits s2: SetSpec): string {
     }
     if (opts.complement) {
         safe {
-            s1.length = DOMAIN_SIZE - charset_of(s1.elems, false).size();
+            s1.length = DOMAIN_SIZE - CharSet.of(s1.elems, false).size();
         }
     }
     if (s1.indefinite_repeats > 0) {

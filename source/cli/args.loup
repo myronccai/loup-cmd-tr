@@ -30,17 +30,27 @@ pub class Options {
     }
 }
 
+# One entry of the option table; none of tr's options takes a value. Each
+# entry names only what it has, and the key defaults to the letter, or to
+# the long name when there is no letter. A helper in this module rather
+# than defaults on cli.getopt's opt(): natively, named arguments to a
+# function of another module crash, and loup run binds them by position.
+func spec(letter: string = "", long_name: string = "", key: string = ""): OptSpec {
+    let k = if (key != "") { key } else if (letter != "") { letter } else { long_name };
+    return opt(letter, long_name, false, k);
+}
+
 func specs(): list[OptSpec] {
     return [
-        opt("c", "complement", false, "c"),
-        opt("C", "", false, "c"),
-        opt("d", "delete", false, "d"),
-        opt("s", "squeeze-repeats", false, "s"),
-        opt("t", "truncate-set1", false, "t"),
+        spec(letter = "c", long_name = "complement"),
+        spec(letter = "C", key = "c"),
+        spec(letter = "d", long_name = "delete"),
+        spec(letter = "s", long_name = "squeeze-repeats"),
+        spec(letter = "t", long_name = "truncate-set1"),
         # Undocumented in GNU tr (AIX compatibility: the C locale); a no-op here.
-        opt("A", "", false, "A"),
-        opt("", "help", false, "help"),
-        opt("", "version", false, "version"),
+        spec(letter = "A"),
+        spec(long_name = "help"),
+        spec(long_name = "version"),
     ];
 }
 

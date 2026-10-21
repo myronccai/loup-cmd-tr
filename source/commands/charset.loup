@@ -10,11 +10,21 @@
 from commands.sets import (Elem, class_members);
 
 pub class CharSet {
-    # first0, last0, first1, last1, ...: sorted, disjoint, not adjacent.
-    var bounds: list[int] = [];
+    # (first, last) of each run of members: sorted, disjoint, not adjacent.
+    var bounds: list[(int, int)] = [];
     pub var complemented: bool = false;
     # Membership of the codes 0..255, with the complement applied.
     var low: list[bool] = [];
+
+    # A set of the members of `elems`, complemented if asked. The factory
+    # sits on the class: callers write CharSet.of(...).
+    pub static func of(elems: list[Elem], invert: bool): CharSet {
+        let s = CharSet();
+        safe {
+            s.build(elems, invert);
+        }
+        return s;
+    }
 
     # Fills the set with the members of `elems` (GNU's set_initialize).
     pub modifier func build(elems: list[Elem], invert: bool): void {
@@ -65,17 +75,16 @@ pub class CharSet {
         }
         # Merge overlapping and adjacent ranges, so that the binary search
         # in in_bounds sees disjoint ones.
-        var merged: list[int] = [];
+        var merged: list[(int, int)] = [];
         k = 0;
         while (k < firsts.len()) {
             let m = merged.len();
-            if (m > 0 and firsts[k] <= merged[m - 1] + 1) {
-                if (lasts[k] > merged[m - 1]) {
-                    merged[m - 1] = lasts[k];
+            if (m > 0 and firsts[k] <= merged[m - 1].1 + 1) {
+                if (lasts[k] > merged[m - 1].1) {
+                    merged[m - 1] = (merged[m - 1].0, lasts[k]);
                 }
             } else {
-                merged.push(firsts[k]);
-                merged.push(lasts[k]);
+                merged.push((firsts[k], lasts[k]));
             }
             k += 1;
         }
@@ -88,15 +97,17 @@ pub class CharSet {
         this.low = table;
     }
 
-    # Whether `code` is in the uncomplemented set.
-    func in_bounds(code: int): bool {
+    # Whether `code` is in the uncomplemented set (a binary search over the
+    # runs).
+    reads func in_bounds(code: int): bool {
         var lo = 0;
-        var hi = this.bounds.len() / 2;
+        var hi = this.bounds.len();
         while (lo < hi) {
             let mid = (lo + hi) / 2;
-            if (code < this.bounds[2 * mid]) {
+            let (first, last) = this.bounds[mid];
+            if (code < first) {
                 hi = mid;
-            } else if (code > this.bounds[2 * mid + 1]) {
+            } else if (code > last) {
                 lo = mid + 1;
             } else {
                 return true;
@@ -105,20 +116,23 @@ pub class CharSet {
         return false;
     }
 
-    pub func contains(code: int): bool {
+    # The query methods only read the set: `reads` says so, and the
+    # checker holds them to it.
+    pub reads func contains(code: int): bool {
         if (code >= 0 and code < 256) {
             return this.low[code];
         }
         return this.in_bounds(code) != this.complemented;
     }
 
-    # How many members of the uncomplemented set are below `code`.
-    pub func count_below(code: int): int {
+    # How many members of the uncomplemented set are below `code`. Called
+    # for every character -c translates, so it indexes the runs: natively a
+    # destructuring `for` over tuples costs memory per pass, an indexed
+    # `let (first, last) = ...` does not.
+    pub reads func count_below(code: int): int {
         var count = 0;
-        var k = 0;
-        while (k < this.bounds.len()) {
-            let first = this.bounds[k];
-            let last = this.bounds[k + 1];
+        for (k in 0..this.bounds.len()) {
+            let (first, last) = this.bounds[k];
             if (first >= code) {
                 return count;
             }
@@ -127,28 +141,16 @@ pub class CharSet {
             } else {
                 count += code - first;
             }
-            k += 2;
         }
         return count;
     }
 
     # How many distinct members the uncomplemented set has.
-    pub func size(): int {
+    pub reads func size(): int {
         var count = 0;
-        var k = 0;
-        while (k < this.bounds.len()) {
-            count += this.bounds[k + 1] - this.bounds[k] + 1;
-            k += 2;
+        for ((first, last) in this.bounds) {
+            count += last - first + 1;
         }
         return count;
     }
-}
-
-# A CharSet of the members of `elems`, complemented if asked.
-pub func charset_of(elems: list[Elem], invert: bool): CharSet {
-    let s = CharSet();
-    safe {
-        s.build(elems, invert);
-    }
-    return s;
 }

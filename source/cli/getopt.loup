@@ -18,8 +18,10 @@
 # Runtime: host.dual. Compiled into the native binary build/tr by `make
 # build`; `loup run source/main.loup` interprets the same code.
 #
-# Field names are unique across the program's structs: the native build
-# lays out struct fields by name, program-wide (see NATIVE-NOTES.md).
+# Field names are unique across the program's structs (hence `letter`,
+# `hit_key`): a native build of Loup 1.26.0 places struct fields by name,
+# program-wide, so two structs sharing a field name in a different order
+# read each other's values as garbage.
 
 # One option: its letter ("" if none), its long name without dashes ("" if
 # none), whether it takes a value, and the key reported when it is seen.
