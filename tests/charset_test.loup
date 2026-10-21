@@ -1,5 +1,12 @@
 @mode(host.dual)
 
+# Unit tests for SET membership (commands.charset): members, complement
+# (raw bytes included), counting below a code, and merged overlaps.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.charset import (CharSet, charset_of);
 from commands.sets import (SetSpec, parse_set);

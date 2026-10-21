@@ -1,5 +1,13 @@
 @mode(host.dual)
 
+# Top level of tr: parse the arguments, handle --help and --version, turn
+# the SETs into a Plan (printing GNU's warnings), run the filter and turn
+# the outcome into an exit status.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code, and the unit
+# tests call run() directly (never on standard input).
+
 from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE, EXIT_USAGE);
 from cli.args import (parse_args);
 from cli.usage import (usage, version_line);

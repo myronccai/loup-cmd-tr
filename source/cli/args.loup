@@ -4,6 +4,9 @@
 # its "+" mode, as GNU tr does: the first operand ends the options, so in
 # `tr a -d` the `-d` is STRING2. Then the number of operands is checked
 # against the options, with GNU tr's messages.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 from cli.getopt import (OptSpec, opt, scan_options);
 from cli.quote import (quote);

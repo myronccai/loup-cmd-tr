@@ -1,5 +1,13 @@
 @mode(host.dual)
 
+# Unit tests for the getopt_long work-alike (cli.getopt), against a small
+# option table of its own: in-order and permuted scanning, values, `--`
+# and `-`, abbreviations, stopping at --help, and getopt's messages.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from cli.getopt import (OptSpec, Scan, opt, scan_options);
 

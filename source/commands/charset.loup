@@ -3,6 +3,9 @@
 # The characters of a SET as a set, for membership tests: its members as
 # sorted, disjoint ranges, optionally complemented. Codes 0..255 are also
 # kept in a table, since most input is ASCII.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 from commands.sets import (Elem, class_members);
 
@@ -60,6 +63,8 @@ pub class CharSet {
             lasts[j + 1] = l;
             k += 1;
         }
+        # Merge overlapping and adjacent ranges, so that the binary search
+        # in in_bounds sees disjoint ones.
         var merged: list[int] = [];
         k = 0;
         while (k < firsts.len()) {

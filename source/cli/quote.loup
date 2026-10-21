@@ -8,6 +8,9 @@
 # - printable() and printable_char() are tr's own make_printable_str and
 #   make_printable_char: control characters as C escapes or `\NNN` octal.
 # Characters outside ASCII are written as they are, as in a UTF-8 locale.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 from commands.utf8 import (char_text, codes_of);
 

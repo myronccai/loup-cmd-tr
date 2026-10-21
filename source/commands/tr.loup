@@ -3,6 +3,12 @@
 # tr itself: delete or translate each character, then squeeze repeats.
 # Standard input is read whole (Loup has no streaming reader), decoded and
 # processed in chunks, and each chunk's output is written as it is ready.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`, which links putchar and fflush from the C library through
+# `extern native "c"`. `loup run source/main.loup` interprets the same
+# code until output that is not valid UTF-8 needs putchar, where it stops;
+# the unit tests (Stage0) use tr_text and filter_units, which print nothing.
 
 import io.fs as fs;
 from appinfo import (APP_NAME, EXIT_OK, EXIT_FAILURE);

@@ -1,7 +1,12 @@
 @mode(host.dual)
 
-# Exit statuses of whole command lines that do not read standard input.
+# Unit tests for the exit statuses of whole command lines that do not read
+# standard input (cli.app.run): help, version, usage errors and a bad SET.
 # These tests print the program's messages.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
 
 from debug.assert import (expectEq);
 from appinfo import (EXIT_OK, EXIT_FAILURE, EXIT_USAGE);

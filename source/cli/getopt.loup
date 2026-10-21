@@ -15,6 +15,9 @@
 #   getopt, `--help` wins over any error that comes after it.
 # Errors are getopt's messages, without the program name.
 #
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
 # Field names are unique across the program's structs: the native build
 # lays out struct fields by name, program-wide (see NATIVE-NOTES.md).
 

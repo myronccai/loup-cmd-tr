@@ -6,6 +6,14 @@
 # `[c*]` and the complement of a SET can stand for a million of them;
 # SetCursor walks it one character at a time and spec_nth() finds the
 # character at a position.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: the Elem enum and the character classes; what an element
+# stands for (elem_length, elem_member, elem_case); SetSpec with GNU's
+# statistics; walking a SET (spec_nth, homogeneous, SetCursor); then the
+# parser: bracket helpers, repeat counts, and parse_set itself.
 
 from cli.quote import (quote, printable, printable_char);
 from commands.escapes import (Unquoted, unquote);
@@ -439,6 +447,11 @@ pub func parse_set(operand: string, edits warnings: list[string]): Result[SetSpe
     let esc = es.escaped;
     let n = c.len();
     let spec = SetSpec();
+    # Every construct and range needs at least three characters, so the
+    # loop runs while three remain and the last one or two characters are
+    # single characters. At an unescaped `[`, GNU tries `[:class:]` and
+    # `[=c=]` first, then `[c*n]`; a `[` that starts neither is an
+    # ordinary character, possibly the start of a range such as `[-]`.
     var i = 0;
     while (i + 2 < n) {
         if (is_plain(c, esc, i, LBRACKET)) {
@@ -465,6 +478,8 @@ pub func parse_set(operand: string, edits warnings: list[string]): Result[SetSpe
                             i = close + 2;
                             continue;
                         }
+                        # Text after `[:` that reads `*N]` makes this `[:*N]`,
+                        # a repeat of `:`, rather than a bad class name.
                         if (!star_digits_closebracket(c, esc, i + 2)) {
                             return Err("invalid character class " + quote(printable(name)));
                         }

@@ -1,5 +1,13 @@
 @mode(host.dual)
 
+# Unit tests for SET parsing (commands.sets): characters and ranges,
+# classes, [=c=] and repeats, brackets that are not constructs, errors,
+# statistics, positions, and the cursor's case kinds.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.sets import (Elem, SetSpec, SetCursor, parse_set, spec_nth, homogeneous, class_members, elem_length, CASE_NONE, CASE_UPPER);
 

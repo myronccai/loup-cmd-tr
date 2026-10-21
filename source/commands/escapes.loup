@@ -4,6 +4,9 @@
 # for each character, whether it came from an escape, because an escaped
 # character never takes part in a `[:class:]`, `[=c=]`, `[c*n]` or `a-z`
 # construct (`\-` is a plain dash).
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 from commands.utf8 import (codes_of);
 

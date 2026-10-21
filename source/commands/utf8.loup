@@ -5,6 +5,11 @@
 # that is not part of well-formed UTF-8 becomes the "raw" code
 # RAW_BASE + byte, above every code point, so that it passes through
 # unchanged and is written back as the same byte.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
+# Decoding bytes here, rather than iterating strings, gives the same codes
+# in every lane, whatever the input holds.
 
 # The first raw code (raw byte 0).
 pub const RAW_BASE: int = 1114112;

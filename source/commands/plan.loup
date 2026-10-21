@@ -3,6 +3,14 @@
 # From options to a Plan: parse the SETs, check them the way GNU tr's
 # validate() does (same order, same messages), and build what the filter
 # needs: the delete set, the squeeze set, and the translation table.
+#
+# Runtime: host.dual. Compiled into the native binary build/tr by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: the Plan class (lookup, then the builders for plain and
+# complemented translation, then setup); GNU's checks (check_case_classes,
+# extension_char, validate); and make_plan, which runs parse, validate and
+# setup in that order.
 
 from cli.args import (Options);
 from commands.charset import (CharSet, charset_of);
@@ -71,6 +79,10 @@ pub class Plan {
                 c1 = cur1.next();
                 c2 = cur2.next();
             }
+            # A case class in SET2 pairs with the element SET1 is in as a
+            # whole: [:lower:] against [:upper:] (or the reverse) maps all
+            # 26 letters at once, and both cursors then skip the rest of
+            # their elements.
             let k1 = cur1.kind;
             let k2 = cur2.kind;
             if (k1 == CASE_LOWER and k2 == CASE_UPPER) {
@@ -222,6 +234,7 @@ func validate(opts: Options, edits s1: SetSpec, edits s2: SetSpec): string {
     if (problem.len() > 0) {
         return problem;
     }
+    # One [c*] in SET2 takes up whatever SET1 has beyond SET2's length.
     if (s1.length >= s2.length and s2.indefinite_repeats == 1) {
         safe {
             s2.size_repeat(s2.indefinite_at, s1.length - s2.length);
@@ -251,6 +264,8 @@ func validate(opts: Options, edits s1: SetSpec, edits s2: SetSpec): string {
             return problem;
         }
     }
+    # Without -t, a SET2 shorter than SET1 is stretched by repeating its
+    # last character (GNU's string2_extend).
     if (s1.length > s2.length and !opts.truncate_set1) {
         if (s2.length == 0) {
             return "when not truncating set1, string2 must be non-empty";
